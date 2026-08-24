@@ -1,6 +1,6 @@
-# WayReally
+# Observatory
 
-WayReally is an iOS app for recording spoken personal reflections and turning them into structured, searchable insight. Speak your thoughts aloud for a few minutes — or half an hour — and WayReally captures the audio, transcribes it on-device, and surfaces patterns: pauses, emotional arc, and (when more than one person is present) who said what.
+Observatory is an iOS app for recording spoken personal reflections and turning them into structured, searchable insight. Speak your thoughts aloud for a few minutes — or half an hour — and WayReally captures the audio, transcribes it on-device, and surfaces patterns: pauses, emotional arc, and (when more than one person is present) who said what.
 
 ## What it does
 
