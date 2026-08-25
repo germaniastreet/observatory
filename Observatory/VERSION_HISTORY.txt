@@ -541,10 +541,10 @@ Repository root contains:
 
 • .git/
 • .gitignore
-• second.xcodeproj
-• second/
+• Observatory.xcodeproj
+• Observatory/
 
-The second/ source folder contains:
+The Observatory/ source folder contains:
 
 • Swift source files
 • Assets.xcassets

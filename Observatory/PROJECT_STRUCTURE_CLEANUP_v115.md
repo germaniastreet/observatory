@@ -7,20 +7,20 @@ This version stabilizes the working project structure before additional feature 
 The Git repository root is the folder that contains:
 
 - `.git/`
-- `second.xcodeproj`
-- `second/`
+- `Observatory.xcodeproj`
+- `Observatory/`
 - `.gitignore`
 
 Open this project file in Xcode:
 
 ```text
-second.xcodeproj
+Observatory.xcodeproj
 ```
 
 The app source files live in:
 
 ```text
-second/
+Observatory/
 ```
 
 ## What was fixed

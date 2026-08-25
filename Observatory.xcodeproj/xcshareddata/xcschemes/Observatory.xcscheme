@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "381ED8A42FDB5CB200B1E569"
-               BuildableName = "second.app"
-               BlueprintName = "second"
-               ReferencedContainer = "container:second.xcodeproj">
+               BuildableName = "Observatory.app"
+               BlueprintName = "Observatory"
+               ReferencedContainer = "container:Observatory.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -51,9 +51,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "381ED8A42FDB5CB200B1E569"
-            BuildableName = "second.app"
-            BlueprintName = "second"
-            ReferencedContainer = "container:second.xcodeproj">
+            BuildableName = "Observatory.app"
+            BlueprintName = "Observatory"
+            ReferencedContainer = "container:Observatory.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -68,9 +68,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "381ED8A42FDB5CB200B1E569"
-            BuildableName = "second.app"
-            BlueprintName = "second"
-            ReferencedContainer = "container:second.xcodeproj">
+            BuildableName = "Observatory.app"
+            BlueprintName = "Observatory"
+            ReferencedContainer = "container:Observatory.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

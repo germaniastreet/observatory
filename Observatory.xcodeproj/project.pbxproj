@@ -22,27 +22,27 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		381ED8A52FDB5CB200B1E569 /* second.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = second.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		383DE4D730169D1900307A1A /* secondTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = secondTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		381ED8A52FDB5CB200B1E569 /* Observatory.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Observatory.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		383DE4D730169D1900307A1A /* ObservatoryTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ObservatoryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		38E0271430144AB700CE7E58 /* Exceptions for "second" folder in "second" target */ = {
+		38E0271430144AB700CE7E58 /* Exceptions for "Observatory" folder in "Observatory" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = 381ED8A42FDB5CB200B1E569 /* second */;
+			target = 381ED8A42FDB5CB200B1E569 /* Observatory */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		381ED8A72FDB5CB200B1E569 /* second */ = {
+		381ED8A72FDB5CB200B1E569 /* Observatory */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				38E0271430144AB700CE7E58 /* Exceptions for "second" folder in "second" target */,
+				38E0271430144AB700CE7E58 /* Exceptions for "Observatory" folder in "Observatory" target */,
 			);
-			path = second;
+			path = Observatory;
 			sourceTree = "<group>";
 		};
 		383DE4D830169D1900307A1A /* secondTests */ = {
@@ -75,7 +75,7 @@
 		381ED89C2FDB5CB200B1E569 = {
 			isa = PBXGroup;
 			children = (
-				381ED8A72FDB5CB200B1E569 /* second */,
+				381ED8A72FDB5CB200B1E569 /* Observatory */,
 				383DE4D830169D1900307A1A /* secondTests */,
 				383DE4C33015AD4D00307A1A /* Frameworks */,
 				381ED8A62FDB5CB200B1E569 /* Products */,
@@ -85,8 +85,8 @@
 		381ED8A62FDB5CB200B1E569 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				381ED8A52FDB5CB200B1E569 /* second.app */,
-				383DE4D730169D1900307A1A /* secondTests.xctest */,
+				381ED8A52FDB5CB200B1E569 /* Observatory.app */,
+				383DE4D730169D1900307A1A /* ObservatoryTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -101,9 +101,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		381ED8A42FDB5CB200B1E569 /* second */ = {
+		381ED8A42FDB5CB200B1E569 /* Observatory */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 381ED8B02FDB5CB300B1E569 /* Build configuration list for PBXNativeTarget "second" */;
+			buildConfigurationList = 381ED8B02FDB5CB300B1E569 /* Build configuration list for PBXNativeTarget "Observatory" */;
 			buildPhases = (
 				381ED8A12FDB5CB200B1E569 /* Sources */,
 				381ED8A22FDB5CB200B1E569 /* Frameworks */,
@@ -114,20 +114,20 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				381ED8A72FDB5CB200B1E569 /* second */,
+				381ED8A72FDB5CB200B1E569 /* Observatory */,
 			);
-			name = second;
+			name = Observatory;
 			packageProductDependencies = (
 				383DE4BF3015A7BE00307A1A /* SpeakerKit */,
 				383DE4C43015AD4D00307A1A /* WhisperKit */,
 			);
 			productName = second;
-			productReference = 381ED8A52FDB5CB200B1E569 /* second.app */;
+			productReference = 381ED8A52FDB5CB200B1E569 /* Observatory.app */;
 			productType = "com.apple.product-type.application";
 		};
-		383DE4D630169D1900307A1A /* secondTests */ = {
+		383DE4D630169D1900307A1A /* ObservatoryTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 383DE4DD30169D1900307A1A /* Build configuration list for PBXNativeTarget "secondTests" */;
+			buildConfigurationList = 383DE4DD30169D1900307A1A /* Build configuration list for PBXNativeTarget "ObservatoryTests" */;
 			buildPhases = (
 				383DE4D330169D1900307A1A /* Sources */,
 				383DE4D430169D1900307A1A /* Frameworks */,
@@ -141,11 +141,11 @@
 			fileSystemSynchronizedGroups = (
 				383DE4D830169D1900307A1A /* secondTests */,
 			);
-			name = secondTests;
+			name = ObservatoryTests;
 			packageProductDependencies = (
 			);
 			productName = secondTests;
-			productReference = 383DE4D730169D1900307A1A /* secondTests.xctest */;
+			productReference = 383DE4D730169D1900307A1A /* ObservatoryTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -167,7 +167,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 381ED8A02FDB5CB200B1E569 /* Build configuration list for PBXProject "second" */;
+			buildConfigurationList = 381ED8A02FDB5CB200B1E569 /* Build configuration list for PBXProject "Observatory" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -184,8 +184,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				381ED8A42FDB5CB200B1E569 /* second */,
-				383DE4D630169D1900307A1A /* secondTests */,
+				381ED8A42FDB5CB200B1E569 /* Observatory */,
+				383DE4D630169D1900307A1A /* ObservatoryTests */,
 			);
 		};
 /* End PBXProject section */
@@ -227,7 +227,7 @@
 /* Begin PBXTargetDependency section */
 		383DE4DC30169D1900307A1A /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 381ED8A42FDB5CB200B1E569 /* second */;
+			target = 381ED8A42FDB5CB200B1E569 /* Observatory */;
 			targetProxy = 383DE4DB30169D1900307A1A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -359,7 +359,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = second/second.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Observatory/second.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2BNM4J757X;
@@ -394,7 +394,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = second/second.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Observatory/second.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2BNM4J757X;
@@ -469,7 +469,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		381ED8A02FDB5CB200B1E569 /* Build configuration list for PBXProject "second" */ = {
+		381ED8A02FDB5CB200B1E569 /* Build configuration list for PBXProject "Observatory" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				381ED8AE2FDB5CB300B1E569 /* Debug */,
@@ -478,7 +478,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		381ED8B02FDB5CB300B1E569 /* Build configuration list for PBXNativeTarget "second" */ = {
+		381ED8B02FDB5CB300B1E569 /* Build configuration list for PBXNativeTarget "Observatory" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				381ED8B12FDB5CB300B1E569 /* Debug */,
@@ -487,7 +487,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		383DE4DD30169D1900307A1A /* Build configuration list for PBXNativeTarget "secondTests" */ = {
+		383DE4DD30169D1900307A1A /* Build configuration list for PBXNativeTarget "ObservatoryTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				383DE4DE30169D1900307A1A /* Debug */,

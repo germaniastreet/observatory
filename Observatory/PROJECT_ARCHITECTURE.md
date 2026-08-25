@@ -19,12 +19,12 @@ of each contributor re-deriving the architecture from scratch.
 ## 1. Folder structure
 
 The project currently uses a single flat source folder — there are no
-subfolders inside `second/` yet:
+subfolders inside `Observatory/` yet:
 
 ```text
 Observatory/                          (outer container folder — not tracked by Xcode)
-  second.xcodeproj/                 (the Xcode project file)
-  second/                           (all Swift source + docs — this is what Xcode calls "the second target")
+  Observatory.xcodeproj/            (the Xcode project file)
+  Observatory/                      (all Swift source + docs — this is the "Observatory" target; the Xcode project/target/scheme were originally named "second" and have since been renamed, but the bundle identifier is still com.germaniastreet.second)
     *.swift                         (all source files, flat, no subfolders)
     Info.plist                      (only exists because of Background Modes; otherwise auto-generated)
     Assets.xcassets/                (app icon, accent color)
