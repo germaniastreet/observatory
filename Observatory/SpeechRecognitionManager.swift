@@ -329,7 +329,7 @@ final class SpeechRecognitionManager: ObservableObject {
         }
 
         silenceTracker.setCallback { [weak self] start, duration in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.currentOnSilenceGap?(start, duration)
             }
         }

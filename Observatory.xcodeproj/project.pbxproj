@@ -45,9 +45,9 @@
 			path = Observatory;
 			sourceTree = "<group>";
 		};
-		383DE4D830169D1900307A1A /* secondTests */ = {
+		383DE4D830169D1900307A1A /* ObservatoryTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = secondTests;
+			path = ObservatoryTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -76,7 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				381ED8A72FDB5CB200B1E569 /* Observatory */,
-				383DE4D830169D1900307A1A /* secondTests */,
+				383DE4D830169D1900307A1A /* ObservatoryTests */,
 				383DE4C33015AD4D00307A1A /* Frameworks */,
 				381ED8A62FDB5CB200B1E569 /* Products */,
 			);
@@ -139,7 +139,7 @@
 				383DE4DC30169D1900307A1A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				383DE4D830169D1900307A1A /* secondTests */,
+				383DE4D830169D1900307A1A /* ObservatoryTests */,
 			);
 			name = ObservatoryTests;
 			packageProductDependencies = (
@@ -359,14 +359,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Observatory/second.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Observatory/Observatory.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2BNM4J757X;
 				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = second/Info.plist;
+				INFOPLIST_FILE = Observatory/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Observatory;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Observatory reads heart rate, heart rate variability, and respiratory rate from Health to show body signals alongside a reflection's transcript. Observatory never writes data back to Health.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Observatory uses the microphone to capture your reflections";
@@ -394,14 +394,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Observatory/second.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Observatory/Observatory.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2BNM4J757X;
 				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = second/Info.plist;
+				INFOPLIST_FILE = Observatory/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Observatory;
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "Observatory reads heart rate, heart rate variability, and respiratory rate from Health to show body signals alongside a reflection's transcript. Observatory never writes data back to Health.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Observatory uses the microphone to capture your reflections";
@@ -441,7 +441,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/second.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/second";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Observatory.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Observatory";
 			};
 			name = Debug;
 		};
@@ -462,7 +462,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/second.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/second";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Observatory.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Observatory";
 			};
 			name = Release;
 		};

@@ -222,10 +222,15 @@ final class HealthKitManager: ObservableObject {
     ) async -> [(Date, Double)] {
         guard let type = HKObjectType.quantityType(forIdentifier: identifier) else { return [] }
 
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
-
+        // Built inside the @Sendable closure below, not captured from outside it --
+        // NSPredicate isn't Sendable, and Swift 6 mode treats crossing that boundary
+        // as an error even though this predicate is only ever read once and never
+        // shared or mutated. Since `start`/`end` (both Sendable `Date`s) are all it's
+        // built from, constructing it fresh inside the closure sidesteps the warning
+        // without changing behavior at all.
         return await withTimeout(seconds: 8, default: []) {
             await withCheckedContinuation { continuation in
+                let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
                 let query = HKSampleQuery(
                     sampleType: type,
                     predicate: predicate,

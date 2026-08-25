@@ -9,7 +9,7 @@
 
 import Testing
 import Foundation
-@testable import second
+@testable import Observatory
 
 // MARK: - Shared test fixtures
 
