@@ -1,10 +1,10 @@
 # Architecture
 
-This document describes how WayReally is put together: the main components, the recording pipeline, and where to look when making changes.
+This document describes how Observatory is put together: the main components, the recording pipeline, and where to look when making changes.
 
 ## Overview
 
-WayReally is a SwiftUI iOS app built around a single core loop: capture audio, transcribe it live, detect pauses and speakers, and present the result. The app favors on-device processing throughout — audio never needs to leave the phone to produce a transcript or a speaker label.
+Observatory is a SwiftUI iOS app built around a single core loop: capture audio, transcribe it live, detect pauses and speakers, and present the result. The app favors on-device processing throughout — audio never needs to leave the phone to produce a transcript or a speaker label.
 
 ## Key components
 

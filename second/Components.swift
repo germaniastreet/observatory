@@ -21,13 +21,13 @@ struct AppCard<Content: View>: View {
                 HStack {
                     Text(title)
                         .font(.headline)
-                        .foregroundStyle(SecondTheme.primaryText)
+                        .foregroundStyle(ObservatoryTheme.primaryText)
 
                     Spacer()
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
-                        .foregroundStyle(SecondTheme.secondaryText)
+                        .foregroundStyle(ObservatoryTheme.secondaryText)
                 }
             }
             .buttonStyle(.plain)
@@ -37,8 +37,8 @@ struct AppCard<Content: View>: View {
             }
         }
         .padding()
-        .background(SecondTheme.card)
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(SecondTheme.border.opacity(0.7)))
+        .background(ObservatoryTheme.card)
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(ObservatoryTheme.border.opacity(0.7)))
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.04), radius: 10, x: 0, y: 4)
     }
@@ -47,12 +47,12 @@ struct AppCard<Content: View>: View {
 struct MetricRow: View {
     let label: String
     let value: String
-    var color: Color = SecondTheme.secondaryText
+    var color: Color = ObservatoryTheme.secondaryText
 
     var body: some View {
         HStack {
             Text(label)
-                .foregroundStyle(SecondTheme.primaryText)
+                .foregroundStyle(ObservatoryTheme.primaryText)
 
             Spacer()
 
@@ -99,12 +99,12 @@ struct ScreenHeader: View {
             Text(title)
                 .font(.largeTitle)
                 .bold()
-                .foregroundStyle(SecondTheme.primaryText)
+                .foregroundStyle(ObservatoryTheme.primaryText)
 
             if let subtitle {
                 Text(subtitle)
                     .font(.subheadline)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -127,7 +127,7 @@ struct SignalBadge: View {
             VStack(alignment: .leading) {
                 Text(title)
                     .font(.caption2)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
 
                 Text(value)
                     .font(.headline)

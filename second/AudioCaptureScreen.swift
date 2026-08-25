@@ -4,13 +4,14 @@ import UIKit
 struct AudioCaptureScreen: View {
     @EnvironmentObject private var store: ReflectionSessionStore
     @EnvironmentObject private var speechManager: SpeechRecognitionManager
+    @EnvironmentObject private var healthKitManager: HealthKitManager
 
     @State private var pendingConsentConfirmation = false
 
     var body: some View {
         NavigationStack {
             ZStack {
-                SecondTheme.background.ignoresSafeArea()
+                ObservatoryTheme.background.ignoresSafeArea()
 
                 ScrollView {
                     VStack(spacing: 16) {
@@ -21,7 +22,7 @@ struct AudioCaptureScreen: View {
                                 TimelineView(.periodic(from: .now, by: 1.0)) { context in
                                     Text(timerText(now: context.date))
                                         .font(.system(size: 44, weight: .bold, design: .rounded))
-                                        .foregroundStyle(SecondTheme.primaryText)
+                                        .foregroundStyle(ObservatoryTheme.primaryText)
                                 }
 
                                 if store.isRecording {
@@ -30,21 +31,21 @@ struct AudioCaptureScreen: View {
 
                                 Text(speechManager.statusMessage)
                                     .font(.caption)
-                                    .foregroundStyle(SecondTheme.secondaryText)
+                                    .foregroundStyle(ObservatoryTheme.secondaryText)
 
                                 HStack(spacing: 36) {
                                     if store.isRecording {
                                         CaptureButton(icon: "stop.fill", label: "Stop", color: Color.red.opacity(0.9)) {
                                             speechManager.stop()
-                                            store.stopAndObserve()
+                                            stopAndFetchBiometrics()
                                         }
 
-                                        CaptureButton(icon: "arrow.counterclockwise", label: "Reset", color: SecondTheme.background) {
+                                        CaptureButton(icon: "arrow.counterclockwise", label: "Reset", color: ObservatoryTheme.background) {
                                             speechManager.stop()
                                             store.resetActiveSession()
                                         }
                                     } else {
-                                        CaptureButton(icon: "record.circle", label: "Start", color: SecondTheme.background) {
+                                        CaptureButton(icon: "record.circle", label: "Start", color: ObservatoryTheme.background) {
                                             // Temporarily bypassing the consent confirmation dialog
                                             // during testing -- startCapture() still records a
                                             // consentAcknowledgedAt timestamp either way. Restore by
@@ -65,7 +66,7 @@ struct AudioCaptureScreen: View {
                         AppCard(title: "About This Screen", startsExpanded: false) {
                             Text("This screen starts and stops the same reflection recording as the Observatory tab — they share one live session, so you can switch tabs mid-recording without losing anything. Raw audio level metering and file format details are not implemented yet; this build captures live speech-to-text only.")
                                 .font(.caption)
-                                .foregroundStyle(SecondTheme.secondaryText)
+                                .foregroundStyle(ObservatoryTheme.secondaryText)
                         }
                         .padding(.horizontal)
                     }
@@ -110,14 +111,14 @@ struct AudioCaptureScreen: View {
                     ForEach(session.transcript) { event in
                         Text(event.text)
                             .font(.subheadline)
-                            .foregroundStyle(SecondTheme.primaryText)
+                            .foregroundStyle(ObservatoryTheme.primaryText)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Text(store.isRecording ? "Listening..." : "Tap Start to begin capturing a reflection.")
                     .font(.subheadline)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
         }
     }
@@ -128,15 +129,44 @@ struct AudioCaptureScreen: View {
         // honest record of when the person actually agreed to start.
         let consentTimestamp = Date()
 
+        // See ObservatoryScreen.startReflectionAndSpeech's matching comment --
+        // requested speculatively here too, since this screen starts and
+        // stops the same shared reflection as Observatory.
+        Task { await healthKitManager.requestAuthorization() }
+
         Task {
             let allowed = await speechManager.requestPermissions()
             guard allowed else { return }
 
             let audioFileName = store.startReflection(consentAcknowledgedAt: consentTimestamp)
 
-            speechManager.start(audioFileName: audioFileName) { utterances in
-                store.updateLiveTranscript(utterances)
-            }
+            speechManager.start(
+                audioFileName: audioFileName,
+                onTranscript: { utterances in
+                    store.updateLiveTranscript(utterances)
+                },
+                onSilenceGap: { start, duration in
+                    store.recordSilenceGap(start: start, duration: duration)
+                }
+            )
+        }
+    }
+
+    /// See ObservatoryScreen.stopAndFetchBiometrics's doc comment -- same
+    /// pattern, duplicated here rather than shared because these two screens
+    /// don't otherwise share a common base type to hang it on.
+    private func stopAndFetchBiometrics() {
+        let sessionID = store.activeSession?.id
+        let reflectionStart = store.activeSession?.startedAt
+        let reflectionEnd = store.activeSession?.endedAt ?? Date()
+
+        store.stopAndObserve()
+
+        guard let sessionID, let reflectionStart else { return }
+
+        Task {
+            let result = await healthKitManager.fetchSamples(reflectionStart: reflectionStart, reflectionEnd: reflectionEnd)
+            store.applyBiometrics(sessionID: sessionID, samples: result.samples, queryStart: result.queryStart, queryEnd: result.queryEnd)
         }
     }
 
@@ -170,7 +200,7 @@ struct RecordingPulse: View {
 
             Text("Listening")
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
         }
         .onAppear { isPulsing = true }
     }
@@ -187,7 +217,7 @@ struct CaptureButton: View {
             Button(action: action) {
                 Image(systemName: icon)
                     .font(.title2)
-                    .foregroundStyle(label == "Stop" ? .white : SecondTheme.primaryText)
+                    .foregroundStyle(label == "Stop" ? .white : ObservatoryTheme.primaryText)
                     .frame(width: 70, height: 70)
                     .background(color)
                     .clipShape(Circle())

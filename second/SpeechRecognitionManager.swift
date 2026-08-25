@@ -10,25 +10,41 @@ final class SpeechRecognitionManager: ObservableObject {
     @Published var statusMessage = "Speech not started."
     @Published var permissionDenied = false
 
-    /// One chunk of recognized speech with real audio-relative timing.
-    /// `start`/`end` are derived from SFSpeechRecognizer's own
-    /// `SFTranscriptionSegment.timestamp`/`.duration` (positions within the
-    /// recognizer's own audio stream), not from when this app's callback
-    /// happened to be scheduled -- so unlike timing based on callback
-    /// arrival, these hold up as real time boundaries even under CPU or
-    /// dispatch-queue jitter. This is what makes it possible for
-    /// SpeakerDiarizationEngine to map a diarization time segment onto more
-    /// than one utterance, and for pause-gap detection to reflect actual
-    /// gaps between recognized speech instead of gaps between callbacks.
+    /// One chunk of recognized speech.
     ///
-    /// A growing (not-yet-finished) utterance keeps the same `start` across
-    /// callbacks -- SFSpeechRecognizer's already-reported word timestamps
-    /// don't get revised, only later words get appended -- so `start` is
-    /// stable the moment an utterance first appears, not just once it ends.
+    /// `start`/`end` used to be derived from SFSpeechRecognizer's own
+    /// `SFTranscriptionSegment.timestamp`/`.duration`. That turned out to be
+    /// a mistake this codebase already learned from once: those segment
+    /// timestamps don't reliably track real elapsed time -- deliberate 10s+
+    /// pauses were confirmed (empirically, via the "Pause gaps: None
+    /// detected" bug) not to reliably show up as timestamp gaps at all,
+    /// which is exactly why SilenceTracker exists as an independent,
+    /// acoustic (RMS-based, real `Date()`) pause detector instead of trusting
+    /// this recognizer-internal clock.
+    ///
+    /// That fix didn't go far enough, though: once acoustic pauses needed to
+    /// be placed *inline*, between the specific two words they fell between,
+    /// this struct's `start`/`end` were still on the old recognizer-internal
+    /// clock while `SilenceTracker`'s pause timestamps are on the real wall
+    /// clock. Comparing a real pause `Date` against a `start`/`end` boundary
+    /// computed from segment.timestamp -- a clock that doesn't advance
+    /// through real silence the way real time does -- meant the pause's
+    /// `Date` almost never actually fell inside any word's window, so inline
+    /// markers silently stopped appearing.
+    ///
+    /// `start`/`end` are now stamped from the real `Date()` of the callback
+    /// that first reported each word (see `SpeechRecognitionManager.utterances`),
+    /// same clock as `SilenceTracker`, so gap placement actually lines up.
     struct Utterance {
         var text: String
         var start: Date
         var end: Date
+
+        /// Per-word timing that made up this utterance, in order. Preserved
+        /// (rather than discarded once merged into `text`) so the transcript
+        /// view can place a pause marker between the exact two words it fell
+        /// between -- see TranscriptEvent.words' doc comment.
+        var words: [WordTiming] = []
     }
 
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -98,7 +114,149 @@ final class SpeechRecognitionManager: ObservableObject {
         }
     }
 
+    /// Detects real silence gaps by measuring RMS amplitude on every audio
+    /// buffer from the tap, independent of speech recognition. Called from
+    /// the same real-time audio thread as `CurrentRequestBox.append`, so it
+    /// has its own lock rather than sharing that one -- there's no ordering
+    /// requirement between the two, and keeping them separate avoids
+    /// widening `CurrentRequestBox`'s lock scope (and its append-after-
+    /// endAudio safety guarantee) to cover unrelated work.
+    private final class SilenceTracker: @unchecked Sendable {
+        private let lock = NSLock()
+        private var isSilent = false
+        private var silenceStart: Date?
+        private var onGap: (@Sendable (Date, TimeInterval) -> Void)?
+
+        /// Wall-clock instant a louder-than-threshold buffer first showed up
+        /// during an ongoing silence, or nil if the most recent buffer was
+        /// itself quiet. Used to require *sustained* louder audio (see
+        /// `resumeDebounce`) before treating a silence as over.
+        private var nonSilentStreakStart: Date?
+
+        /// RMS amplitude (0...1 scale, Float32 PCM) below this is treated as
+        /// silence. This is a heuristic, not a calibrated measurement --
+        /// tuned for a phone at normal talking distance in a quiet-to-
+        /// moderate room. Erring toward "misses a real but very quiet pause"
+        /// is preferable to erring toward "flags normal quiet speech as
+        /// silence."
+        private let silenceRMSThreshold: Float = 0.02
+
+        /// A single buffer is ~20-25ms at typical sample rates -- far
+        /// shorter than a real word. Without this, one buffer of incidental
+        /// noise during a real multi-second pause (a breath, the phone
+        /// shifting, a background click) ends the silence measurement right
+        /// there, fragmenting one real pause into several shorter ones and
+        /// silently losing whatever didn't individually clear
+        /// `minimumGapDuration`. In testing this was the actual cause of a
+        /// deliberate ~10s pause showing up as two separate 1.6s pauses
+        /// instead of one accurate ~10s one. Requiring louder audio to be
+        /// sustained this long before ending a silence makes a brief blip
+        /// not count, while real resumed speech (which lasts far longer than
+        /// this) still ends the silence promptly.
+        private let resumeDebounce: TimeInterval = 0.3
+
+        /// Matches ReflectionSessionStore.minimumObservablePause -- gaps
+        /// shorter than this aren't recorded as evidence.
+        private let minimumGapDuration: TimeInterval = 1.5
+
+        func setCallback(_ callback: @escaping @Sendable (Date, TimeInterval) -> Void) {
+            lock.lock()
+            defer { lock.unlock() }
+            onGap = callback
+        }
+
+        func reset() {
+            lock.lock()
+            defer { lock.unlock() }
+            isSilent = false
+            silenceStart = nil
+            nonSilentStreakStart = nil
+        }
+
+        func process(_ buffer: AVAudioPCMBuffer, at date: Date) {
+            guard let channelData = buffer.floatChannelData else { return }
+            let frameCount = Int(buffer.frameLength)
+            guard frameCount > 0 else { return }
+
+            let samples = channelData[0]
+            var sumSquares: Float = 0
+            for i in 0..<frameCount {
+                let sample = samples[i]
+                sumSquares += sample * sample
+            }
+            let rms = (sumSquares / Float(frameCount)).squareRoot()
+
+            lock.lock()
+            var firedCallback: (@Sendable (Date, TimeInterval) -> Void)?
+            var firedArgs: (Date, TimeInterval)?
+
+            if rms < silenceRMSThreshold {
+                // Quiet buffer -- cancel any not-yet-confirmed "speech
+                // resumed" streak (it was just a blip) and, if this is the
+                // start of a new silence, mark it.
+                nonSilentStreakStart = nil
+                if !isSilent {
+                    isSilent = true
+                    silenceStart = date
+                }
+            } else if isSilent {
+                // A louder buffer during an ongoing silence. Don't end the
+                // silence yet -- only once louder audio has been sustained
+                // for `resumeDebounce` is this treated as speech actually
+                // resuming, so a single brief noise blip can't fragment a
+                // real pause.
+                if nonSilentStreakStart == nil {
+                    nonSilentStreakStart = date
+                }
+
+                if let streakStart = nonSilentStreakStart,
+                   date.timeIntervalSince(streakStart) >= resumeDebounce {
+                    // Confirmed: speech actually resumed. The silence
+                    // genuinely ended when the louder audio first started
+                    // (`streakStart`), not now -- `date` also includes the
+                    // debounce window itself, which is real audio, not
+                    // silence.
+                    if let silenceStart {
+                        let duration = streakStart.timeIntervalSince(silenceStart)
+                        if duration >= minimumGapDuration {
+                            firedCallback = onGap
+                            firedArgs = (silenceStart, duration)
+                        }
+                    }
+                    isSilent = false
+                    silenceStart = nil
+                    nonSilentStreakStart = nil
+                }
+            }
+            lock.unlock()
+
+            if let firedCallback, let firedArgs {
+                firedCallback(firedArgs.0, firedArgs.1)
+            }
+        }
+    }
+
     private let currentRequestBox = CurrentRequestBox()
+
+    /// Tracks real acoustic silence directly from the raw microphone
+    /// buffers, entirely independent of SFSpeechRecognizer's own segment
+    /// timestamps.
+    ///
+    /// Why this exists: pause detection originally relied on gaps between
+    /// SFTranscriptionSegment timestamps (see the old `Utterance`-gap
+    /// approach still used below for utterance *splitting*). In testing,
+    /// deliberate multi-second silences produced no usable timestamp gap --
+    /// "Pause gaps: None detected" on a reflection that had several 10s
+    /// pauses. The likely explanation is that the on-device recognizer's
+    /// segment timestamps track recognized-speech time, not raw wall-clock
+    /// buffer time, so silence between words doesn't reliably show up as a
+    /// timestamp jump the way true acoustic silence would. Measuring RMS
+    /// directly on the same buffers already flowing through the audio tap
+    /// sidesteps that entirely -- it doesn't depend on anything
+    /// SFSpeechRecognizer decides to report.
+    private let silenceTracker = SilenceTracker()
+
+    private var currentOnSilenceGap: (@MainActor (Date, TimeInterval) -> Void)?
 
     /// Utterances finalized from earlier listening segments in this
     /// recording. Apple's speech engine ends a "segment" (an
@@ -126,12 +284,22 @@ final class SpeechRecognitionManager: ObservableObject {
     /// segment, so this is cheap and always consistent).
     private var currentSegmentUtterances: [Utterance] = []
 
-    /// Wall-clock instant the current segment's audio actually started
-    /// (right after `audioEngine.start()` succeeds, or immediately after a
-    /// mid-stream segment swap that doesn't restart the engine) -- lets us
-    /// convert a segment-relative `SFTranscriptionSegment.timestamp` into an
-    /// absolute `Date`.
+    /// Non-nil once the current segment's audio has actually started (right
+    /// after `audioEngine.start()` succeeds, or immediately after a
+    /// mid-stream segment swap that doesn't restart the engine). Used only
+    /// as a "has recognition actually begun" gate in `handleRecognition` --
+    /// word/utterance timestamps no longer derive from this (see
+    /// `Utterance`'s doc comment for why).
     private var segmentAudioStartDate: Date?
+
+    /// Real wall-clock time each already-recognized word was first reported
+    /// by SFSpeechRecognizer, indexed by its position among all non-empty
+    /// words seen so far in the current segment. `utterances(from:...)`
+    /// consults this on every call (which re-delivers the *entire*
+    /// transcript-so-far, not just what's new) so an already-stamped word
+    /// keeps its original real timestamp instead of being re-stamped with a
+    /// later "now" on every subsequent partial-result callback.
+    private var lastRealWords: [WordTiming] = []
 
     /// Treat a gap this long or longer between two recognized utterances as
     /// a separate utterance rather than a continuation of the same one.
@@ -157,6 +325,12 @@ final class SpeechRecognitionManager: ObservableObject {
 
             Task { @MainActor [weak self] in
                 self?.handleInterruption(type: type, optionsValue: optionsValue)
+            }
+        }
+
+        silenceTracker.setCallback { [weak self] start, duration in
+            Task { @MainActor in
+                self?.currentOnSilenceGap?(start, duration)
             }
         }
     }
@@ -197,8 +371,13 @@ final class SpeechRecognitionManager: ObservableObject {
         return true
     }
 
-    func start(audioFileName: String, onTranscript: @escaping @MainActor ([Utterance]) -> Void) {
+    func start(
+        audioFileName: String,
+        onTranscript: @escaping @MainActor ([Utterance]) -> Void,
+        onSilenceGap: (@MainActor (Date, TimeInterval) -> Void)? = nil
+    ) {
         currentOnTranscript = onTranscript
+        currentOnSilenceGap = onSilenceGap
         sealedUtterances = []
         currentSegmentUtterances = []
         segmentAudioStartDate = nil
@@ -207,6 +386,7 @@ final class SpeechRecognitionManager: ObservableObject {
         wasRecordingBeforeInterruption = false
         audioFile = nil
         pendingAudioFileURL = Self.audioFileURL(named: audioFileName)
+        silenceTracker.reset()
 
         beginListeningSegment()
     }
@@ -216,7 +396,7 @@ final class SpeechRecognitionManager: ObservableObject {
             ?? FileManager.default.temporaryDirectory
 
         return baseURL
-            .appendingPathComponent("WayReally", isDirectory: true)
+            .appendingPathComponent("Observatory", isDirectory: true)
             .appendingPathComponent("Audio", isDirectory: true)
             .appendingPathComponent(fileName)
     }
@@ -241,6 +421,12 @@ final class SpeechRecognitionManager: ObservableObject {
 
         currentSegmentUtterances = []
         segmentAudioStartDate = nil
+
+        // A new recognition request starts SFSpeechRecognizer's own segment
+        // array back at empty, so word-index-based lookups into the
+        // previous segment's real timestamps would line up with the wrong
+        // words if this weren't cleared too.
+        lastRealWords = []
 
         do {
             let audioSession = AVAudioSession.sharedInstance()
@@ -288,8 +474,9 @@ final class SpeechRecognitionManager: ObservableObject {
                 // engine down -- (re)install the tap and start fresh.
                 previousRequest?.endAudio()
                 inputNode.removeTap(onBus: 0)
-                inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [currentRequestBox] buffer, _ in
+                inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [currentRequestBox, silenceTracker] buffer, _ in
                     currentRequestBox.append(buffer)
+                    silenceTracker.process(buffer, at: Date())
                 }
 
                 audioEngine.prepare()
@@ -312,27 +499,30 @@ final class SpeechRecognitionManager: ObservableObject {
         }
     }
 
-    /// Groups a result's word/phrase-level segments into utterances, using
-    /// each segment's own audio-relative timestamp -- splitting wherever the
-    /// gap since the previous segment ended is at least
-    /// `utteranceGapThreshold`. Because this reads real recognizer segment
-    /// timing rather than wall-clock callback arrival, it's the same
-    /// grouping every time it's recomputed for a given result, growing only
-    /// as new segments are recognized.
+    /// Groups a result's word/phrase-level segments into utterances,
+    /// splitting wherever the gap since the previous word's real timestamp
+    /// is at least `utteranceGapThreshold`. `result.bestTranscription.segments`
+    /// only ever grows within one recognition request, and each already-seen
+    /// word keeps the real timestamp it was first stamped with (via
+    /// `lastRealWords`), so re-running this on every partial-result callback
+    /// reproduces the same grouping for previously-seen words and only adds
+    /// new ones -- it's not idempotent in the sense of being independent of
+    /// *when* it's called (it depends on real elapsed time between calls),
+    /// but it is stable in the sense that already-placed words and pause
+    /// windows don't get rewritten underneath the UI.
     ///
     /// Text for each segment comes from `formattedString` (via
     /// `segment.substringRange`), not `segment.substring` -- the latter is
     /// SFSpeechRecognizer's raw per-word text with none of the
     /// capitalization, punctuation, and smart-formatting Apple normally
     /// applies to `bestTranscription.formattedString`. Reconstructing the
-    /// transcript from raw substrings (the original version of this
-    /// timestamp rewrite did this) reads as noticeably lower quality even
-    /// when every word was recognized correctly. `substringRange` is the
-    /// documented way to map a segment back onto its formatted text, so this
-    /// keeps the real per-segment timing this rewrite needs while restoring
-    /// the same text quality the app had before it.
-    private func utterances(from segments: [SFTranscriptionSegment], formattedString: String, segmentStart: Date) -> [Utterance] {
+    /// transcript from raw substrings (an earlier version of this function
+    /// did this) reads as noticeably lower quality even when every word was
+    /// recognized correctly. `substringRange` is the documented way to map a
+    /// segment back onto its formatted text.
+    private func utterances(from segments: [SFTranscriptionSegment], formattedString: String, now: Date) -> [Utterance] {
         var result: [Utterance] = []
+        var flatWords: [WordTiming] = []
         let formatted = formattedString as NSString
 
         for segment in segments {
@@ -349,29 +539,48 @@ final class SpeechRecognitionManager: ObservableObject {
             let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
 
-            let start = segmentStart.addingTimeInterval(segment.timestamp)
-            let end = start.addingTimeInterval(segment.duration)
+            // Position among non-empty words seen so far this call -- lines
+            // up with how `lastRealWords` was built on the previous call, so
+            // a word already stamped keeps its real timestamp instead of
+            // being overwritten with a later "now" every time this whole
+            // (re-delivered) transcript is recomputed.
+            let wordIndex = flatWords.count
+            let word: WordTiming
+            if wordIndex < lastRealWords.count, lastRealWords[wordIndex].text == text {
+                word = lastRealWords[wordIndex]
+            } else {
+                // Newly reported this call -- `now` (this callback's real
+                // Date) is the only honest anchor available: SFSpeechRecognizer
+                // doesn't tell us when the word was actually *spoken*, only
+                // when it finished being *recognized*, which is close enough
+                // for placing pause markers and lines up with SilenceTracker's
+                // clock, unlike segment.timestamp (see Utterance's doc comment).
+                word = WordTiming(text: text, start: now, end: now)
+            }
+            flatWords.append(word)
 
             if let lastIndex = result.indices.last,
-               start.timeIntervalSince(result[lastIndex].end) < Self.utteranceGapThreshold {
+               word.start.timeIntervalSince(result[lastIndex].end) < Self.utteranceGapThreshold {
                 result[lastIndex].text += " " + text
-                result[lastIndex].end = end
+                result[lastIndex].end = word.end
+                result[lastIndex].words.append(word)
             } else {
-                result.append(Utterance(text: text, start: start, end: end))
+                result.append(Utterance(text: text, start: word.start, end: word.end, words: [word]))
             }
         }
 
+        lastRealWords = flatWords
         return result
     }
 
     private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
-        if let result, let segmentStart = segmentAudioStartDate {
+        if let result, segmentAudioStartDate != nil {
             let segments = result.bestTranscription.segments
             if !segments.isEmpty {
                 currentSegmentUtterances = utterances(
                     from: segments,
                     formattedString: result.bestTranscription.formattedString,
-                    segmentStart: segmentStart
+                    now: Date()
                 )
             }
 
@@ -438,6 +647,12 @@ final class SpeechRecognitionManager: ObservableObject {
             isRecording = false
             statusMessage = "Paused — interrupted (call, Siri, or another app)."
 
+            // The mic isn't capturing during an interruption, so whatever
+            // silence state was mid-measurement is meaningless -- reset
+            // rather than let it produce a bogus gap (or a bogus *missing*
+            // gap) once the tap resumes.
+            silenceTracker.reset()
+
         case .ended:
             guard wasRecordingBeforeInterruption else { return }
             wasRecordingBeforeInterruption = false
@@ -475,6 +690,8 @@ final class SpeechRecognitionManager: ObservableObject {
         recognitionRequest = nil
         recognitionTask = nil
         isRecording = false
+        silenceTracker.reset()
+        currentOnSilenceGap = nil
 
         // AVAudioFile has no explicit close() -- releasing it finalizes the
         // file on disk.

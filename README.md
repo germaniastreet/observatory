@@ -1,6 +1,6 @@
-# WayReally
+# Observatory
 
-WayReally is an iOS app for recording spoken personal reflections and turning them into structured, searchable insight. Speak your thoughts aloud for a few minutes — or half an hour — and WayReally captures the audio, transcribes it on-device, and surfaces patterns: pauses, emotional arc, and (when more than one person is present) who said what.
+Observatory is an iOS app for recording spoken personal reflections and turning them into structured, searchable insight. Speak your thoughts aloud for a few minutes — or half an hour — and Observatory captures the audio, transcribes it on-device, and surfaces patterns: pauses, emotional arc, and (when more than one person is present) who said what.
 
 ## What it does
 
@@ -20,7 +20,7 @@ WayReally is an iOS app for recording spoken personal reflections and turning th
 
 ## Project structure
 
-This repository contains the Xcode project (`second.xcodeproj`) for the WayReally iOS app, along with its test targets (`secondTests`). See `ARCHITECTURE.md` for a tour of the codebase and how the pieces fit together.
+This repository contains the Xcode project (`second.xcodeproj`) for the Observatory iOS app, along with its test targets (`secondTests`). See `ARCHITECTURE.md` for a tour of the codebase and how the pieces fit together.
 
 ## Requirements
 
@@ -31,8 +31,8 @@ This repository contains the Xcode project (`second.xcodeproj`) for the WayReall
 
 ## Status
 
-WayReally is under active development. See `ROADMAP.md` for what's built, what's in progress, and what's planned next.
+Observatory is under active development. See `ROADMAP.md` for what's built, what's in progress, and what's planned next.
 
 ## Privacy
 
-WayReally records audio of personal reflections, which is inherently sensitive. See `SECURITY.md` for details on how data is handled and stored.
+Observatory records audio of personal reflections, which is inherently sensitive. See `SECURITY.md` for details on how data is handled and stored.

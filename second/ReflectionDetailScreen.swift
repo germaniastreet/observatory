@@ -5,7 +5,7 @@ struct ReflectionDetailScreen: View {
 
     var body: some View {
         ZStack {
-            SecondTheme.background.ignoresSafeArea()
+            ObservatoryTheme.background.ignoresSafeArea()
 
             ScrollView {
                 VStack(spacing: 16) {
@@ -57,13 +57,13 @@ struct ReflectionDetailScreen: View {
             if observationDetail("Suggested Direction") != "Pending" {
                 Text("Suggested direction: \(observationDetail("Suggested Direction"))")
                     .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
 
             if observationDetail("Key Signals") != "Pending" {
                 Text("Key signals: \(observationDetail("Key Signals"))")
                     .font(.caption2)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -81,12 +81,12 @@ struct ReflectionDetailScreen: View {
 
             Text(observationDetail("Reflection Arc"))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             if observationDetail("Arc Key Events") != "Pending" && !observationDetail("Arc Key Events").isEmpty {
                 Text("Evidence: \(observationDetail("Arc Key Events"))")
                     .font(.caption2)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
         }
     }
@@ -156,7 +156,7 @@ struct ReflectionDetailScreen: View {
             if session.transcript.isEmpty {
                 Text("No transcript captured.")
                     .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             } else {
                 ForEach(transcriptRows) { row in
                     switch row {
@@ -164,18 +164,18 @@ struct ReflectionDetailScreen: View {
                         HStack(alignment: .top, spacing: 12) {
                             Text(event.timestamp.shortTimeWithSeconds)
                                 .font(.caption2)
-                                .foregroundStyle(SecondTheme.secondaryText)
+                                .foregroundStyle(ObservatoryTheme.secondaryText)
                                 .frame(width: 78, alignment: .leading)
 
                             Text(event.speaker.rawValue)
                                 .font(.caption)
                                 .bold()
-                                .foregroundStyle(SecondTheme.primaryText)
+                                .foregroundStyle(ObservatoryTheme.primaryText)
                                 .frame(width: 38, alignment: .leading)
 
                             Text(event.text)
                                 .font(.subheadline)
-                                .foregroundStyle(SecondTheme.primaryText)
+                                .foregroundStyle(ObservatoryTheme.primaryText)
                         }
                     case .pause(_, let duration):
                         pauseIndicator(duration: duration)
@@ -192,7 +192,7 @@ struct ReflectionDetailScreen: View {
                 VStack { Divider() }
                 Text("quiet · \(Self.formattedGapDuration(duration))")
                     .font(.caption2)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
                     .fixedSize()
                 VStack { Divider() }
             }
@@ -205,7 +205,7 @@ struct ReflectionDetailScreen: View {
                 Text("···  \(Self.formattedGapDuration(duration)) pause")
                     .font(.caption2)
                     .italic()
-                    .foregroundStyle(SecondTheme.secondaryText.opacity(0.8))
+                    .foregroundStyle(ObservatoryTheme.secondaryText.opacity(0.8))
 
                 Spacer()
             }
@@ -230,7 +230,7 @@ struct ReflectionDetailScreen: View {
 
             Text(observationDetail("Emotional Trajectory"))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             MetricRow(label: "Movement", value: observationDetail("Trajectory Movement"))
             MetricRow(label: "Start", value: observationDetail("Trajectory Start"))
@@ -241,12 +241,12 @@ struct ReflectionDetailScreen: View {
             sectionTitle("Observation Events")
             Text(ObservationEventEngine.eventSummary(session.observationEvents))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             if session.observationEvents.isEmpty {
                 Text("No micro-observation events recorded.")
                     .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             } else {
                 ForEach(ObservationEventEngine.groupedEvents(session.observationEvents), id: \.category) { group in
                     VStack(alignment: .leading, spacing: 8) {
@@ -256,7 +256,7 @@ struct ReflectionDetailScreen: View {
 
                         Text(ObservationEventEngine.categorySummary(group.category, events: group.events))
                             .font(.caption)
-                            .foregroundStyle(SecondTheme.secondaryText)
+                            .foregroundStyle(ObservatoryTheme.secondaryText)
 
                         ForEach(group.events.prefix(5)) { event in
                             VStack(alignment: .leading, spacing: 3) {
@@ -266,12 +266,12 @@ struct ReflectionDetailScreen: View {
 
                                 Text(event.detail)
                                     .font(.caption2)
-                                    .foregroundStyle(SecondTheme.secondaryText)
+                                    .foregroundStyle(ObservatoryTheme.secondaryText)
 
                                 if let related = event.relatedText {
                                     Text("Related: \(related)")
                                         .font(.caption2)
-                                        .foregroundStyle(SecondTheme.secondaryText)
+                                        .foregroundStyle(ObservatoryTheme.secondaryText)
                                         .lineLimit(2)
                                 }
 
@@ -279,7 +279,7 @@ struct ReflectionDetailScreen: View {
                                     Text("Other readings: " + event.alternativeExplanations.joined(separator: " · "))
                                         .font(.caption2)
                                         .italic()
-                                        .foregroundStyle(SecondTheme.secondaryText)
+                                        .foregroundStyle(ObservatoryTheme.secondaryText)
                                         .lineLimit(3)
                                 }
                             }
@@ -293,7 +293,7 @@ struct ReflectionDetailScreen: View {
             sectionTitle("Dynamics")
             Text(DynamicsEngine.summary(session.dynamicsPatterns))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             ForEach(session.dynamicsPatterns) { pattern in
                 VStack(alignment: .leading, spacing: 4) {
@@ -303,7 +303,7 @@ struct ReflectionDetailScreen: View {
 
                     Text(pattern.detail)
                         .font(.caption2)
-                        .foregroundStyle(SecondTheme.secondaryText)
+                        .foregroundStyle(ObservatoryTheme.secondaryText)
                 }
             }
 
@@ -312,7 +312,7 @@ struct ReflectionDetailScreen: View {
             sectionTitle("Correlations")
             Text(CorrelationEngine.summary(session.observationCorrelations))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             ForEach(session.observationCorrelations) { correlation in
                 VStack(alignment: .leading, spacing: 4) {
@@ -322,7 +322,7 @@ struct ReflectionDetailScreen: View {
 
                     Text(correlation.summary)
                         .font(.caption2)
-                        .foregroundStyle(SecondTheme.secondaryText)
+                        .foregroundStyle(ObservatoryTheme.secondaryText)
                 }
             }
         }
@@ -350,12 +350,12 @@ struct ReflectionDetailScreen: View {
 
                 Text("Body signals from \(session.biometrics.queryStart.shortTimeWithSeconds)–\(session.biometrics.queryEnd.shortTimeWithSeconds)")
                     .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
 
                 if session.biometrics.samples.isEmpty {
-                    Text("No Apple Watch samples were received during this reflection.")
+                    Text("No Health data was found for this reflection's time window -- either Health access hasn't been granted (see Settings), or there's no heart rate, HRV, or respiratory data recorded for this window.")
                         .font(.caption)
-                        .foregroundStyle(SecondTheme.secondaryText)
+                        .foregroundStyle(ObservatoryTheme.secondaryText)
                 } else {
                     MetricRow(
                         label: "Latest heart rate",
@@ -371,12 +371,28 @@ struct ReflectionDetailScreen: View {
                     )
                     MetricRow(
                         label: "Source",
-                        value: "Apple Watch"
+                        value: biometricSourceText
                     )
                 }
 
                 MetricRow(label: "Data quality", value: session.biometrics.quality.rawValue.capitalized)
             }
+        }
+    }
+
+    /// `BiometricSample.source` is per-sample (`SignalSource`), not one flat
+    /// label for the whole window -- in practice every sample in a given
+    /// window currently comes from the same fetch (HealthKitManager stamps
+    /// every sample `.healthKitBackfill`), but reading it from the actual
+    /// samples rather than hardcoding a value keeps this honest if that ever
+    /// changes (e.g. once a live Watch path exists alongside backfill).
+    private var biometricSourceText: String {
+        guard let source = session.biometrics.samples.first?.source else { return "Unknown" }
+        switch source {
+        case .healthKitBackfill: return "Health (backfill)"
+        case .liveWatch: return "Apple Watch (live)"
+        case .mock: return "Sample data"
+        default: return source.rawValue.capitalized
         }
     }
 

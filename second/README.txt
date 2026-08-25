@@ -355,7 +355,7 @@ Important:
 • The active Xcode project to open is the repository-root second.xcodeproj.
 • The live source folder is second/.
 • Do not place saved versions, expanded archives, or old project copies inside the live Git working tree.
-• The project's display name has been updated to WayReally. The underlying Xcode project/target names are still `second` and renaming those should be handled as a separate controlled version.
+• The project's display name has been updated to Observatory. The underlying Xcode project/target names are still `second` and renaming those should be handled as a separate controlled version.
 
 Tag: v115
 

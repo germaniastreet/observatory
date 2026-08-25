@@ -7,6 +7,12 @@ struct ContentView: View {
     /// same live recording instead of each owning a separate speech engine.
     @StateObject private var speechManager = SpeechRecognitionManager()
 
+    /// Shared the same way as speechManager -- both recording screens (and
+    /// Settings, for the manual "Grant Health Access" control) need the same
+    /// authorization state and HealthKit connection rather than each owning
+    /// its own.
+    @StateObject private var healthKitManager = HealthKitManager()
+
     var body: some View {
         TabView {
             ObservatoryScreen()
@@ -46,9 +52,10 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gearshape")
                 }
         }
-        .tint(SecondTheme.heartRate)
+        .tint(ObservatoryTheme.heartRate)
         .environmentObject(sessionStore)
         .environmentObject(speechManager)
+        .environmentObject(healthKitManager)
     }
 }
 

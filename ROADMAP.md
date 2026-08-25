@@ -1,6 +1,6 @@
 # Roadmap
 
-This document tracks what's working, what's actively being investigated, and what's planned for WayReally.
+This document tracks what's working, what's actively being investigated, and what's planned for Observatory.
 
 ## Recently shipped
 

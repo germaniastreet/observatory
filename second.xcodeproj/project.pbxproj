@@ -359,6 +359,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = second/second.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2BNM4J757X;
@@ -366,9 +367,10 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = second/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = WayReally;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "WayReally uses the microphone to capture your reflections";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "WayReally uses speech recognition to transcribe your reflections";
+				INFOPLIST_KEY_CFBundleDisplayName = Observatory;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Observatory reads heart rate, heart rate variability, and respiratory rate from Health to show body signals alongside a reflection's transcript. Observatory never writes data back to Health.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Observatory uses the microphone to capture your reflections";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Observatory uses speech recognition to transcribe your reflections";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -392,6 +394,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = second/second.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2BNM4J757X;
@@ -399,9 +402,10 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = second/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = WayReally;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "WayReally uses the microphone to capture your reflections";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "WayReally uses speech recognition to transcribe your reflections";
+				INFOPLIST_KEY_CFBundleDisplayName = Observatory;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Observatory reads heart rate, heart rate variability, and respiratory rate from Health to show body signals alongside a reflection's transcript. Observatory never writes data back to Health.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Observatory uses the microphone to capture your reflections";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Observatory uses speech recognition to transcribe your reflections";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

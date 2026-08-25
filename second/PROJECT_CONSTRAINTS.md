@@ -1,10 +1,10 @@
-# WayReally — Project Constraints
+# Observatory — Project Constraints
 ## Source of Truth • v0.2 • 2026-06-23
 
 This file is binding for every future design, code, data-model, UI, and roadmap decision. If a proposed change conflicts with it, the change must be revised or the constraint must be explicitly amended and versioned.
 
 ## 1. Product purpose
-WayReally is a multimodal personal observability system. Its long-term purpose is to help a person notice meaningful change in their body, behavior, context, language, and interactions early enough to understand, anticipate, or gently mitigate it.
+Observatory is a multimodal personal observability system. Its long-term purpose is to help a person notice meaningful change in their body, behavior, context, language, and interactions early enough to understand, anticipate, or gently mitigate it.
 
 It is not primarily a journaling app, transcript viewer, detector dashboard, or diagnostic product.
 
@@ -50,7 +50,7 @@ Every observation, pattern, recommendation, or safety cue must retain:
 The system must be able to answer: “Why did you say that?” without exposing unnecessary raw data by default.
 
 ## 6. Safety and health boundaries
-WayReally detects change, associations, and possible need for attention. It does not diagnose disease, infer a medical condition as fact, or present a causal claim without sufficient evidence.
+Observatory detects change, associations, and possible need for attention. It does not diagnose disease, infer a medical condition as fact, or present a causal claim without sufficient evidence.
 
 Separate layers are required:
 - observation
@@ -67,7 +67,7 @@ Phrases, words, vocal markers (including ums, oks, pauses, garbled language), pa
 Libraries may be created by:
 - the user
 - a moderator/administrator
-- WayReally
+- Observatory
 - an approved third party
 
 Hard-coded rules are temporary prototypes only. Each must have a documented migration path into a library schema.

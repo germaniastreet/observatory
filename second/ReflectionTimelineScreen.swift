@@ -8,23 +8,23 @@ struct ReflectionTimelineScreen: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                SecondTheme.background.ignoresSafeArea()
+                ObservatoryTheme.background.ignoresSafeArea()
 
                 VStack(spacing: 16) {
                     Spacer()
 
                     Image(systemName: "hourglass")
                         .font(.system(size: 56))
-                        .foregroundStyle(SecondTheme.secondaryText)
+                        .foregroundStyle(ObservatoryTheme.secondaryText)
 
                     Text("Coming Soon")
                         .font(.title2)
                         .bold()
-                        .foregroundStyle(SecondTheme.primaryText)
+                        .foregroundStyle(ObservatoryTheme.primaryText)
 
                     Text("This tab is being reworked into something new. Your reflection history now lives on the Observatory tab.")
                         .font(.subheadline)
-                        .foregroundStyle(SecondTheme.secondaryText)
+                        .foregroundStyle(ObservatoryTheme.secondaryText)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
 

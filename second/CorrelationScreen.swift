@@ -10,7 +10,7 @@ struct CorrelationScreen: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                SecondTheme.background.ignoresSafeArea()
+                ObservatoryTheme.background.ignoresSafeArea()
 
                 ScrollView {
                     VStack(spacing: 16) {
@@ -24,11 +24,11 @@ struct CorrelationScreen: View {
 
                                     Text("\(session.timeRangeText) • \(session.durationText)")
                                         .font(.caption)
-                                        .foregroundStyle(SecondTheme.secondaryText)
+                                        .foregroundStyle(ObservatoryTheme.secondaryText)
 
                                     Text(CorrelationEngine.summary(session.observationCorrelations))
                                         .font(.caption)
-                                        .foregroundStyle(SecondTheme.secondaryText)
+                                        .foregroundStyle(ObservatoryTheme.secondaryText)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -47,7 +47,7 @@ struct CorrelationScreen: View {
                                 AppCard(title: "No Correlations Yet") {
                                     Text("Record a reflection with multiple observation events. Correlations appear when events such as uncertainty, pause gaps, breath cues, self-correction, stress, or conflict occur together.")
                                         .font(.subheadline)
-                                        .foregroundStyle(SecondTheme.secondaryText)
+                                        .foregroundStyle(ObservatoryTheme.secondaryText)
                                 }
                                 .padding(.horizontal)
                             } else {
@@ -56,7 +56,7 @@ struct CorrelationScreen: View {
                                         VStack(alignment: .leading, spacing: 8) {
                                             Text(correlation.timestamp.displayTime)
                                                 .font(.caption)
-                                                .foregroundStyle(SecondTheme.secondaryText)
+                                                .foregroundStyle(ObservatoryTheme.secondaryText)
 
                                             Text(correlation.summary)
                                                 .font(.subheadline)
@@ -73,14 +73,14 @@ struct CorrelationScreen: View {
                                                 ForEach(correlation.sourceEventTitles, id: \.self) { title in
                                                     Text("• \(title)")
                                                         .font(.caption)
-                                                        .foregroundStyle(SecondTheme.secondaryText)
+                                                        .foregroundStyle(ObservatoryTheme.secondaryText)
                                                 }
                                             }
 
                                             if !correlation.tags.isEmpty {
                                                 Text("Tags: \(correlation.tags.joined(separator: ", "))")
                                                     .font(.caption2)
-                                                    .foregroundStyle(SecondTheme.secondaryText)
+                                                    .foregroundStyle(ObservatoryTheme.secondaryText)
                                                     .padding(.top, 4)
                                             }
                                         }
@@ -92,7 +92,7 @@ struct CorrelationScreen: View {
                             AppCard(title: "No Reflection Available") {
                                 Text("Create a reflection first. Correlations will appear after observation events are generated.")
                                     .font(.subheadline)
-                                    .foregroundStyle(SecondTheme.secondaryText)
+                                    .foregroundStyle(ObservatoryTheme.secondaryText)
                             }
                             .padding(.horizontal)
                         }

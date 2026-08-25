@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum SecondTheme {
+enum ObservatoryTheme {
     static let background = Color(red: 0.92, green: 0.91, blue: 0.89)
     static let card = Color.white
     static let border = Color(red: 0.84, green: 0.82, blue: 0.78)

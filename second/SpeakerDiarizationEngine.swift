@@ -18,26 +18,53 @@ import WhisperKit // AudioProcessor.loadAudioAsFloatArray lives here, not in Spe
 /// asserting one of them is specifically "You" would be presenting a guess
 /// as a fact.
 ///
-/// IMPORTANT: this is the one file in WayReally built against a third-party
+/// IMPORTANT: this is the one file in Observatory built against a third-party
 /// package's exact API without a compiler available here to verify it. If
 /// Xcode reports a "has no member" or "cannot find type" error anywhere in
 /// this file, that's expected -- the fix is almost certainly a one- or
 /// two-line rename once the real member name is visible in the error.
 enum SpeakerDiarizationEngine {
-    static let engineVersion = "0.3"
+    static let engineVersion = "0.4"
 
     /// A speaker must account for at least this much total speaking time
     /// (summed across every RTTM segment attributed to them) before they
-    /// count toward "more than one distinct speaker found." Lowered to 0.5s
-    /// to catch participants who speak briefly. Pyannote's confidence scores
-    /// help filter actual noise from real (but brief) speech.
-    private static let minimumSpeakerDuration: TimeInterval = 0.5
+    /// count toward "more than one distinct speaker found."
+    ///
+    /// History: started at 2.0s, lowered to 0.5s to catch brief participants
+    /// -- but 0.5s turned out to be far too permissive in practice: solo
+    /// reflections were getting relabeled "Speaker A" because Pyannote
+    /// briefly misread a breath, echo, or pitch shift in the *same* voice as
+    /// a second speaker. An absolute floor alone can't tell "brief real
+    /// second speaker" from "brief misattribution," so this is raised back
+    /// up and paired with `minimumSpeakerProportion` below, which a
+    /// momentary misattribution is much less likely to clear even if it
+    /// happens to land above this duration floor.
+    private static let minimumSpeakerDuration: TimeInterval = 3.0
+
+    /// A speaker must ALSO account for at least this fraction of the total
+    /// substantial speaking time (across every speaker that clears
+    /// `minimumSpeakerDuration`) before they count as distinct. This is what
+    /// actually distinguishes "someone else spoke for a while" from "the
+    /// model briefly misattributed a few seconds of the same voice" -- a
+    /// misattribution can clear an absolute duration floor on a long
+    /// recording while still being a tiny sliver of the total, so duration
+    /// alone (the only check before this) wasn't enough.
+    private static let minimumSpeakerProportion: Double = 0.15
 
     /// Re-labels `session.transcript` by speaker, using the session's saved
-    /// audio file. Returns the session unchanged (still nil
-    /// diarizationEngineVersion) if there's no audio file, diarization finds
-    /// only one distinct voice, or anything fails -- speaker labeling is a
-    /// layer on top of a transcript that already works fine without it.
+    /// audio file. `diarizationEngineVersion` is set whenever diarization
+    /// actually completes (successfully processed real audio into segments)
+    /// -- regardless of whether it found more than one distinct speaker --
+    /// so it means "this session has been checked," not "this session's
+    /// transcript got relabeled." Those are different things: a solo
+    /// reflection (the common case) is *supposed* to come back unrelabeled,
+    /// and before this it looked identical in Diagnostics to a reflection
+    /// where diarization never ran at all -- both showed "Not yet run,"
+    /// which made it impossible to tell "diarization is broken" from
+    /// "diarization worked and correctly found only one speaker." Stays nil
+    /// only for the cases where diarization genuinely couldn't be attempted
+    /// or failed: no audio file, missing audio file, no parseable segments,
+    /// or a thrown error.
     static func label(session: ReflectionSession) async -> ReflectionSession {
         var session = session
 
@@ -53,6 +80,13 @@ enum SpeakerDiarizationEngine {
             let segments = Self.parseSegments(from: result, fileName: audioFileName)
             guard !segments.isEmpty else { return session }
 
+            // Diarization genuinely ran and produced real segments -- mark
+            // this session as checked now, before the distinct-speaker
+            // filtering below, so a single-speaker result (which correctly
+            // leaves the transcript untouched) still reads as "checked,"
+            // not "never attempted."
+            session.diarizationEngineVersion = engineVersion
+
             // A recording with exactly one voice can still produce more than
             // one RTTM segment (the same speaker turning on and off) -- so
             // checking segment *count* alone (the previous behavior) could
@@ -60,12 +94,20 @@ enum SpeakerDiarizationEngine {
             // because diarization emitted multiple same-speaker segments.
             // What actually matters is whether more than one *distinct*
             // speaker identifier was found -- and, per minimumSpeakerDuration
-            // above, whether that identifier represents real, sustained
-            // speech rather than a momentary noise blip.
+            // and minimumSpeakerProportion above, whether that identifier
+            // represents real, sustained speech from a genuinely separate
+            // person rather than a momentary misattribution within one
+            // person's voice.
             let totalDurationByLabel = Dictionary(grouping: segments, by: \.label)
                 .mapValues { $0.reduce(0) { $0 + ($1.end - $1.start) } }
-            let substantialSegments = segments.filter {
-                (totalDurationByLabel[$0.label] ?? 0) >= minimumSpeakerDuration
+            let totalSubstantialDuration = totalDurationByLabel.values
+                .filter { $0 >= minimumSpeakerDuration }
+                .reduce(0, +)
+            let substantialSegments = segments.filter { segment in
+                let labelDuration = totalDurationByLabel[segment.label] ?? 0
+                guard labelDuration >= minimumSpeakerDuration else { return false }
+                guard totalSubstantialDuration > 0 else { return false }
+                return (labelDuration / totalSubstantialDuration) >= minimumSpeakerProportion
             }
             let distinctSpeakers = Set(substantialSegments.map(\.label))
             guard distinctSpeakers.count >= 2 else { return session }
@@ -78,7 +120,6 @@ enum SpeakerDiarizationEngine {
                 }
                 return event
             }
-            session.diarizationEngineVersion = engineVersion
         } catch {
             print("Speaker diarization failed: \(error.localizedDescription)")
         }
@@ -125,7 +166,7 @@ enum SpeakerDiarizationEngine {
             ?? FileManager.default.temporaryDirectory
 
         return baseURL
-            .appendingPathComponent("WayReally", isDirectory: true)
+            .appendingPathComponent("Observatory", isDirectory: true)
             .appendingPathComponent("Audio", isDirectory: true)
             .appendingPathComponent(fileName)
     }

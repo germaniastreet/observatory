@@ -31,12 +31,54 @@ final class ReflectionSessionStore: ObservableObject {
     private let minimumObservablePause: TimeInterval = 1.5
 
     init() {
+        // One-time migration from the app's pre-rename storage folder name
+        // ("WayReally") to the current one ("Observatory") -- see
+        // migrateLegacyStorageIfNeeded's doc comment. Must run before
+        // loadPersistedSessions() below, or a device that still has the old
+        // folder would look empty on this first post-rename launch even
+        // though its reflections are still on disk, just under the old name.
+        Self.migrateLegacyStorageIfNeeded()
+
         // Start honestly empty when there's no saved history yet, rather
         // than showing fabricated demo content that looks indistinguishable
         // from real personal reflections (see PROJECT_CONSTRAINTS.md honesty
         // principle -- this was confusing/concerning to a real user in
         // practice once real data was lost and demo data resurfaced).
         completedSessions = Self.loadPersistedSessions() ?? []
+    }
+
+    /// Moves the app's entire Application Support storage folder from its
+    /// pre-rename name ("WayReally") to its current one ("Observatory") --
+    /// this app was renamed from WayReally to Observatory, but a device that
+    /// already has saved reflections has them sitting in a folder still
+    /// literally named "WayReally" on disk (completed_reflections_v1.json,
+    /// the Audio/ subfolder, everything `storeURL()` and
+    /// `deleteAllAudioFiles()` read from). Without this, those reflections
+    /// would silently stop appearing the moment this rename shipped -- not
+    /// because they were deleted, but because every code path now only ever
+    /// looks under the new "Observatory" folder name. Moves the whole folder
+    /// in one step (JSON store and Audio/ together, since both already live
+    /// under the same base folder) rather than migrating file-by-file.
+    ///
+    /// Safe to call on every launch: no-ops immediately if there's no legacy
+    /// folder (a fresh install, or a device that already migrated), and
+    /// deliberately does NOT overwrite an existing "Observatory" folder if
+    /// one somehow already exists (leaves the legacy folder in place rather
+    /// than risk clobbering newer data with older data).
+    private static func migrateLegacyStorageIfNeeded() {
+        let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let legacyURL = baseURL.appendingPathComponent("WayReally", isDirectory: true)
+        let currentURL = baseURL.appendingPathComponent("Observatory", isDirectory: true)
+
+        guard FileManager.default.fileExists(atPath: legacyURL.path) else { return }
+        guard !FileManager.default.fileExists(atPath: currentURL.path) else { return }
+
+        do {
+            try FileManager.default.moveItem(at: legacyURL, to: currentURL)
+        } catch {
+            print("Legacy storage migration (WayReally -> Observatory) failed: \(error.localizedDescription)")
+        }
     }
 
     var isRecording: Bool {
@@ -119,6 +161,7 @@ final class ReflectionSessionStore: ObservableObject {
                         confidence: gap >= 2.5 ? .medium : .low,
                         relatedText: utterances[index - 1].text,
                         tags: ["pause", "silence", "speech-timing"],
+                        duration: gap,
                         engineVersion: ObservationEventEngine.engineVersion
                     )
                 )
@@ -130,13 +173,44 @@ final class ReflectionSessionStore: ObservableObject {
                 let idx = transcriptIndices[i]
                 session.transcript[idx].text = utterance.text
                 session.transcript[idx].timestamp = utterance.start
+                session.transcript[idx].words = utterance.words
             } else {
                 session.transcript.append(
-                    TranscriptEvent(timestamp: utterance.start, speaker: .user, text: utterance.text, source: .transcript)
+                    TranscriptEvent(timestamp: utterance.start, speaker: .user, text: utterance.text, source: .transcript, words: utterance.words)
                 )
                 transcriptIndices.append(session.transcript.count - 1)
             }
         }
+
+        activeSession = session
+    }
+
+    /// Records a pause detected directly from raw microphone audio (RMS-based
+    /// silence, from SpeechRecognitionManager.SilenceTracker) rather than
+    /// inferred from gaps between recognized-speech timestamps. This is the
+    /// primary pause-detection path -- see SilenceTracker's doc comment for
+    /// why the timestamp-based approach in updateLiveTranscript above wasn't
+    /// reliably catching real pauses. Kept as a separate method (rather than
+    /// folded into updateLiveTranscript) since it's driven by an independent
+    /// callback on its own timing, not by the utterance list.
+    func recordSilenceGap(start: Date, duration: TimeInterval) {
+        guard var session = activeSession, session.state == .recording else { return }
+
+        session.observationEvents.append(
+            ObservationEvent(
+                timestamp: start,
+                kind: .pauseGap,
+                category: .voice,
+                title: "Pause gap",
+                detail: String(format: "Acoustic silence of %.1f seconds detected in the raw audio.", duration),
+                source: .acoustic,
+                confidence: duration >= 4.0 ? .high : .medium,
+                relatedText: nil,
+                tags: ["pause", "silence", "speech-timing", "acoustic"],
+                duration: duration,
+                engineVersion: ObservationEventEngine.engineVersion
+            )
+        )
 
         activeSession = session
     }
@@ -162,6 +236,11 @@ final class ReflectionSessionStore: ObservableObject {
             )
         }
 
+        // Placeholder until applyBiometrics (below) patches in whatever
+        // HealthKitManager actually finds -- that fetch is async (a real
+        // HealthKit query), so it can't complete before this synchronous
+        // method returns. Mirrors how diarizationEngineVersion/transcript
+        // speaker labels are patched in after the fact, a few lines down.
         session.biometrics = BiometricWindow(queryStart: session.startedAt, queryEnd: end, samples: [], quality: .unavailable)
 
         session.observationEvents = ObservationEventEngine.enrich(session: session)
@@ -206,7 +285,11 @@ final class ReflectionSessionStore: ObservableObject {
             Observation(title: "Focus Signal", detail: analysis.focusSignal, confidence: analysis.confidence)
         ]
 
-        let pauseCount = session.observationEvents.filter { $0.kind == .pauseGap }.count
+        // Two independent detectors can each record a pauseGap event for the
+        // same real pause (see recordSilenceGap's doc comment) -- the
+        // acoustic one (tagged "acoustic") is the reliable source, so count
+        // from that alone rather than risk double-counting every pause.
+        let pauseCount = session.observationEvents.filter { $0.kind == .pauseGap && $0.tags.contains("acoustic") }.count
 
         session.voice = VoiceSignals(
             wordsPerMinute: analysis.wordsPerMinute,
@@ -244,6 +327,39 @@ final class ReflectionSessionStore: ObservableObject {
         if activeSession?.id == labeled.id {
             activeSession?.transcript = labeled.transcript
             activeSession?.diarizationEngineVersion = labeled.diarizationEngineVersion
+        }
+    }
+
+    /// Patches real HealthKit samples (or an honest empty result) into a
+    /// session's `biometrics` after the fact, once
+    /// `HealthKitManager.fetchSamples` -- a real async query -- completes.
+    /// Called from the recording screen, not from inside `stopAndObserve()`
+    /// itself: `HealthKitManager` is a vendor-specific adapter owned by the
+    /// screen layer (same pattern as `SpeechRecognitionManager`), not
+    /// something this store instantiates or depends on directly, per
+    /// PROJECT_CONSTRAINTS.md #11 ("no engine should depend on a specific
+    /// device/vendor unless it is an adapter") and PROJECT_ARCHITECTURE.md's
+    /// "no UI screen should own durable business logic" -- the screen
+    /// triggers the fetch, but the store is still the only thing that
+    /// mutates session state. `quality` reflects whether HealthKit actually
+    /// returned anything: `.unavailable` for a genuine empty result (no
+    /// Watch, no data in this window, or access declined) stays visually and
+    /// semantically distinct from `.medium` (real samples present) rather
+    /// than presenting silence as evidence.
+    func applyBiometrics(sessionID: UUID, samples: [BiometricSample], queryStart: Date, queryEnd: Date) {
+        let window = BiometricWindow(
+            queryStart: queryStart,
+            queryEnd: queryEnd,
+            samples: samples,
+            quality: samples.isEmpty ? .unavailable : .medium
+        )
+
+        if let index = completedSessions.firstIndex(where: { $0.id == sessionID }) {
+            completedSessions[index].biometrics = window
+        }
+
+        if activeSession?.id == sessionID {
+            activeSession?.biometrics = window
         }
     }
 
@@ -285,7 +401,7 @@ final class ReflectionSessionStore: ObservableObject {
         do {
             let data = try JSONEncoder.reflectionSessionEncoder.encode(completedSessions)
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("WayReally-Export-\(Int(Date().timeIntervalSince1970)).json")
+                .appendingPathComponent("Observatory-Export-\(Int(Date().timeIntervalSince1970)).json")
             try data.write(to: url, options: [.atomic])
             return url
         } catch {
@@ -303,7 +419,7 @@ final class ReflectionSessionStore: ObservableObject {
         let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         let audioDirectory = baseURL
-            .appendingPathComponent("WayReally", isDirectory: true)
+            .appendingPathComponent("Observatory", isDirectory: true)
             .appendingPathComponent("Audio", isDirectory: true)
         try? FileManager.default.removeItem(at: audioDirectory)
     }
@@ -343,7 +459,7 @@ final class ReflectionSessionStore: ObservableObject {
             ?? FileManager.default.temporaryDirectory
 
         return baseURL
-            .appendingPathComponent("WayReally", isDirectory: true)
+            .appendingPathComponent("Observatory", isDirectory: true)
             .appendingPathComponent("completed_reflections_v1.json")
     }
 }

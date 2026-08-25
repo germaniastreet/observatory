@@ -81,6 +81,28 @@ struct ObservationEvent: Identifiable, Codable {
     /// PROJECT_CONSTRAINTS.md #6 and PROJECT_ARCHITECTURE.md section 7.
     var alternativeExplanations: [String] = []
 
+    /// The actual measured duration, for events where "how long" is
+    /// meaningful (currently just `.pauseGap`). Only ever set at the moment
+    /// the event is created, from a real measurement -- e.g.
+    /// ReflectionSessionStore.recordSilenceGap's acoustic reading.
+    ///
+    /// This exists because the transcript view used to *infer* a pause's
+    /// duration at render time from the gap between two transcript
+    /// utterances, which quietly assumed exactly one pause happens between
+    /// any two utterances. When SFSpeechRecognizer doesn't split speech into
+    /// separate utterances around a pause (which turns out to be common --
+    /// its segment timestamps don't reliably reflect real silence), that
+    /// assumption breaks: multiple real, distinct pauses can land inside one
+    /// utterance-to-utterance window, and inferring duration from window
+    /// boundaries then produces nonsense (observed: five real pauses of a
+    /// few seconds each, rendered as one "quiet · 53.6s" marker spanning
+    /// from the first pause's start to the end of the whole recording).
+    /// Storing the real, already-measured duration on the event itself and
+    /// rendering that directly avoids re-deriving it from an assumption that
+    /// doesn't hold. `nil` for events created before this existed, or for
+    /// kinds where duration isn't meaningful.
+    var duration: TimeInterval? = nil
+
     var engineVersion: String
 }
 
@@ -165,16 +187,20 @@ struct ReflectionSession: Identifiable, Codable {
     var consentAcknowledgedAt: Date? = nil
 
     /// Filename (not a full path) of this reflection's raw audio recording
-    /// under Application Support/WayReally/Audio/, if one was captured.
+    /// under Application Support/Observatory/Audio/, if one was captured.
     /// Kept separate from the JSON session store so a large audio file isn't
     /// duplicated into every session-list read/write. nil for reflections
     /// recorded before this existed, or if writing the file failed.
     var audioFileName: String? = nil
 
-    /// Set once SpeakerDiarizationEngine has (attempted to) re-label this
-    /// session's transcript by speaker. nil means diarization hasn't run yet
-    /// (or failed) -- the transcript is still whatever
-    /// SpeechRecognitionManager originally produced (all `.user`).
+    /// Set once SpeakerDiarizationEngine has actually run diarization against
+    /// this session's audio and gotten a real result back -- regardless of
+    /// whether it found more than one distinct speaker. This means "checked,"
+    /// not "transcript got relabeled": a solo reflection is supposed to come
+    /// back with this set but the transcript untouched (still all `.user`).
+    /// nil means diarization hasn't run yet, or couldn't be attempted, or
+    /// failed (no audio file, missing audio, or a thrown error) -- see
+    /// SpeakerDiarizationEngine.label's doc comment.
     var diarizationEngineVersion: String? = nil
 
     var durationSeconds: Int {
@@ -206,6 +232,27 @@ struct TranscriptEvent: Identifiable, Codable {
     var speaker: Speaker
     var text: String
     var source: SignalSource
+
+    /// Per-word timing within this utterance, from
+    /// SpeechRecognitionManager.Utterance.words. Lets the transcript view
+    /// place a pause marker between the specific two words it actually fell
+    /// between, instead of only between whole utterances -- which used to
+    /// mean every pause in a long stretch of un-split speech (common; see
+    /// SilenceTracker's doc comment on SFSpeechRecognizer's segment timing)
+    /// rendered clustered at the end of that entire block rather than where
+    /// it actually happened. Empty for text with no word-level timing
+    /// available (older saved reflections, or non-transcript entries like
+    /// the "no speech captured" marker) -- the transcript view falls back to
+    /// showing pauses after the whole utterance in that case.
+    var words: [WordTiming] = []
+}
+
+/// One recognized word (or short phrase segment) with its own real timing,
+/// straight from SFTranscriptionSegment via SpeechRecognitionManager.
+struct WordTiming: Codable, Hashable {
+    var text: String
+    var start: Date
+    var end: Date
 }
 
 /// Not a fixed two-party enum -- `.other` carries a label (e.g. "Speaker 2",

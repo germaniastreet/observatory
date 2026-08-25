@@ -1,4 +1,4 @@
-# WayReally — Project Architecture
+# Observatory — Project Architecture
 
 ## Source of Truth • v1.0 • 2026-07-25
 
@@ -22,7 +22,7 @@ The project currently uses a single flat source folder — there are no
 subfolders inside `second/` yet:
 
 ```text
-WayReally/                          (outer container folder — not tracked by Xcode)
+Observatory/                          (outer container folder — not tracked by Xcode)
   second.xcodeproj/                 (the Xcode project file)
   second/                           (all Swift source + docs — this is what Xcode calls "the second target")
     *.swift                         (all source files, flat, no subfolders)
@@ -169,9 +169,9 @@ There is no database (no CoreData, no SwiftData, no SQLite). Storage is
 JSON files on disk, all under the app's Application Support directory
 (`FileManager.default.urls(for: .applicationSupportDirectory, ...)`):
 
-- `WayReally/completed_reflections_v1.json` — `[ReflectionSession]` via
+- `Observatory/completed_reflections_v1.json` — `[ReflectionSession]` via
   `JSONEncoder`/`JSONDecoder`, written by `ReflectionSessionStore`.
-- `WayReally/Audio/<session-id>.caf` — one raw audio file per reflection
+- `Observatory/Audio/<session-id>.caf` — one raw audio file per reflection
   that captured audio, written by `SpeechRecognitionManager` and read by
   `SpeakerDiarizationEngine`.
 - `PersistentSignalLibraryStore` encodes `[SignalLibrary]` the same way,

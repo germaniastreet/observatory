@@ -561,7 +561,7 @@ Important:
 • No saved versions folder is included in the live working-project archive.
 • No old expanded project copies are included.
 • No project rename was performed yet.
-• Rename to WayReally should be handled in a later controlled version (the display name shown to users was already updated separately).
+• Rename to Observatory should be handled in a later controlled version (the display name shown to users was already updated separately).
 
 Git:
 

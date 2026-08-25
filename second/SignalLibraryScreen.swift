@@ -6,7 +6,7 @@ struct SignalLibraryScreen: View {
 
     var body: some View {
         ZStack {
-            SecondTheme.background.ignoresSafeArea()
+            ObservatoryTheme.background.ignoresSafeArea()
 
             ScrollView {
                 VStack(spacing: 16) {
@@ -22,7 +22,7 @@ struct SignalLibraryScreen: View {
 
                             Text("This is the first database-like foundation. Future versions can add import/export UI, authoring tools, validation, moderation, and third-party libraries.")
                                 .font(.caption)
-                                .foregroundStyle(SecondTheme.secondaryText)
+                                .foregroundStyle(ObservatoryTheme.secondaryText)
 
                             HStack {
                                 Button("Export Preview") {
@@ -62,7 +62,7 @@ struct SignalLibraryScreen: View {
 
                                 Text(library.description)
                                     .font(.caption)
-                                    .foregroundStyle(SecondTheme.secondaryText)
+                                    .foregroundStyle(ObservatoryTheme.secondaryText)
 
                                 Divider()
 
@@ -78,20 +78,20 @@ struct SignalLibraryScreen: View {
 
                                         Text("\(rule.id) • \(rule.matchType.rawValue)")
                                             .font(.caption2)
-                                            .foregroundStyle(SecondTheme.secondaryText)
+                                            .foregroundStyle(ObservatoryTheme.secondaryText)
 
                                         Text("Event: \(rule.title)")
                                             .font(.caption2)
-                                            .foregroundStyle(SecondTheme.secondaryText)
+                                            .foregroundStyle(ObservatoryTheme.secondaryText)
 
                                         Text("Phrases: \(rule.phrases.prefix(5).joined(separator: ", "))")
                                             .font(.caption2)
-                                            .foregroundStyle(SecondTheme.secondaryText)
+                                            .foregroundStyle(ObservatoryTheme.secondaryText)
                                             .lineLimit(2)
 
                                         Text("Confidence: \(rule.confidence.rawValue.capitalized)")
                                             .font(.caption2)
-                                            .foregroundStyle(SecondTheme.secondaryText)
+                                            .foregroundStyle(ObservatoryTheme.secondaryText)
                                     }
 
                                     Divider()
@@ -105,7 +105,7 @@ struct SignalLibraryScreen: View {
                         AppCard(title: "Export Preview") {
                             Text(exportedJSONPreview)
                                 .font(.caption2.monospaced())
-                                .foregroundStyle(SecondTheme.secondaryText)
+                                .foregroundStyle(ObservatoryTheme.secondaryText)
                                 .lineLimit(16)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }

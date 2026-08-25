@@ -14,6 +14,7 @@ struct ObservatoryScreen: View {
     /// Shared with AudioCaptureScreen (injected from ContentView) so starting
     /// or stopping a reflection from either tab controls the same recording.
     @EnvironmentObject private var speechManager: SpeechRecognitionManager
+    @EnvironmentObject private var healthKitManager: HealthKitManager
 
     @State private var pendingConsentConfirmation = false
     @State private var pendingDeleteSession: ReflectionSession?
@@ -22,12 +23,12 @@ struct ObservatoryScreen: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                SecondTheme.background.ignoresSafeArea()
+                ObservatoryTheme.background.ignoresSafeArea()
 
                 ScrollView {
                     VStack(spacing: 16) {
                         ScreenHeader(
-                            title: "WayReally",
+                            title: "Observatory",
                             subtitle: nil
                         )
 
@@ -38,12 +39,12 @@ struct ObservatoryScreen: View {
                                 Text("Recording Reflection")
                                     .font(.subheadline)
                                     .bold()
-                                    .foregroundStyle(SecondTheme.primaryText)
+                                    .foregroundStyle(ObservatoryTheme.primaryText)
 
                                 TimelineView(.periodic(from: .now, by: 1.0)) { context in
                                     Text("\(session.timeRangeText) • \(durationText(for: session, now: context.date))")
                                         .font(.caption)
-                                        .foregroundStyle(SecondTheme.secondaryText)
+                                        .foregroundStyle(ObservatoryTheme.secondaryText)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -142,7 +143,7 @@ struct ObservatoryScreen: View {
             onStart: { startReflectionAndSpeech() },
             onStop: {
                 speechManager.stop()
-                store.stopAndObserve()
+                stopAndFetchBiometrics()
             }
         )
         .padding(.horizontal)
@@ -155,15 +156,59 @@ struct ObservatoryScreen: View {
         // honest record of when the person actually agreed to start.
         let consentTimestamp = Date()
 
+        // Requested speculatively at reflection start (same pattern as
+        // speechManager.requestPermissions() below) rather than only when
+        // Stop is pressed, so the system prompt -- if this is the first time
+        // -- happens before the person starts talking, not in the middle of
+        // wrapping up. Not awaited against the recording start: a slow or
+        // ignored HealthKit prompt shouldn't block speech capture, which is
+        // the part of a reflection that actually can't be backfilled later.
+        Task { await healthKitManager.requestAuthorization() }
+
         Task {
             let allowed = await speechManager.requestPermissions()
             guard allowed else { return }
 
             let audioFileName = store.startReflection(consentAcknowledgedAt: consentTimestamp)
 
-            speechManager.start(audioFileName: audioFileName) { utterances in
-                store.updateLiveTranscript(utterances)
-            }
+            speechManager.start(
+                audioFileName: audioFileName,
+                onTranscript: { utterances in
+                    store.updateLiveTranscript(utterances)
+                },
+                onSilenceGap: { start, duration in
+                    store.recordSilenceGap(start: start, duration: duration)
+                }
+            )
+        }
+    }
+
+    /// Stops the reflection, then separately fetches this reflection's real
+    /// HealthKit samples and patches them in once the query completes.
+    /// `store.stopAndObserve()` runs synchronously and moves the session
+    /// into `completedSessions` immediately (with an empty, `.unavailable`
+    /// biometrics window as a placeholder -- see its doc comment); the
+    /// HealthKit query is a real async round trip, so this can't be part of
+    /// that same synchronous call. Captures the session's ID/time window
+    /// right after stopping, before anything else can mutate `activeSession`.
+    private func stopAndFetchBiometrics() {
+        let sessionID = store.activeSession?.id
+        let reflectionStart = store.activeSession?.startedAt
+        let reflectionEnd = store.activeSession?.endedAt ?? Date()
+
+        store.stopAndObserve()
+
+        guard let sessionID, let reflectionStart else { return }
+
+        Task {
+            // fetchSamples pads the search window on both sides of the
+            // reflection's actual start/end (see HealthKitManager.queryPadding's
+            // doc comment) -- applyBiometrics records the *actual* window
+            // searched (result.queryStart/queryEnd), not the reflection's own
+            // start/end, so "Body signals from X-Y" in the UI stays honest
+            // about what was really queried.
+            let result = await healthKitManager.fetchSamples(reflectionStart: reflectionStart, reflectionEnd: reflectionEnd)
+            store.applyBiometrics(sessionID: sessionID, samples: result.samples, queryStart: result.queryStart, queryEnd: result.queryEnd)
         }
     }
 
@@ -172,11 +217,30 @@ struct ObservatoryScreen: View {
     private func liveTranscriptCard(_ session: ReflectionSession) -> some View {
         AppCard(title: "Live Reflection") {
             VStack(alignment: .leading, spacing: 14) {
-                transcriptView(session)
+                // Previously wrapped in `TimelineView(.periodic(from: .now,
+                // by: 1.0))` so an ongoing pause's duration would visibly
+                // climb in real time rather than sitting frozen between
+                // transcript updates. That's no longer necessary -- every
+                // detected pause now gets its `duration` fixed at the moment
+                // SilenceTracker actually confirms it ended (see
+                // ObservationEvent.duration's doc comment), not derived live
+                // from "now," so there's nothing left that needs a live
+                // count-up. Worse, that periodic tick was rebuilding
+                // inlineTranscriptText's entire word-by-word `Text`
+                // concatenation from scratch every single second for as long
+                // as the current utterance kept growing -- SwiftUI's `Text`
+                // concatenation scales badly with tree size, and this was
+                // confirmed to freeze the app partway into a real recording
+                // once a single continuous utterance grew past roughly a
+                // paragraph. A plain `Date()` re-renders naturally whenever
+                // the transcript or a pause gap actually changes (both are
+                // `@Published` on the store), which is the only time this
+                // view needs to update at all.
+                transcriptView(session, referenceEnd: Date())
 
                 Text(speechManager.statusMessage)
                     .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
         }
         .padding(.horizontal)
@@ -188,7 +252,7 @@ struct ObservatoryScreen: View {
         AppCard(title: "No Reflections Yet") {
             Text("Tap Start Reflection above to record your first one. Finished reflections are saved to your device and will appear here.")
                 .font(.subheadline)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
         }
         .padding(.horizontal)
     }
@@ -207,7 +271,7 @@ struct ObservatoryScreen: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text("\(session.timeRangeText) • \(session.durationText)")
                     .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
 
                 summaryView(session)
 
@@ -219,7 +283,12 @@ struct ObservatoryScreen: View {
                 Divider()
 
                 sectionTitle("Transcript")
-                transcriptView(session)
+                // A completed reflection's last pause (if it ended mid-pause)
+                // is measured against when the reflection actually ended,
+                // not "now" -- otherwise reopening this card days later would
+                // show the pause as having lasted until the moment you
+                // reopened it.
+                transcriptView(session, referenceEnd: session.endedAt ?? Date())
 
                 Divider()
 
@@ -249,22 +318,22 @@ struct ObservatoryScreen: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(primaryInsight(session))
                 .font(.headline)
-                .foregroundStyle(SecondTheme.primaryText)
+                .foregroundStyle(ObservatoryTheme.primaryText)
 
             Text(observationDetail(session, title: "Reflection Summary"))
                 .font(.subheadline)
-                .foregroundStyle(SecondTheme.primaryText)
+                .foregroundStyle(ObservatoryTheme.primaryText)
 
             if observationDetail(session, title: "Suggested Direction") != "Pending" {
                 Text("Suggested direction: \(observationDetail(session, title: "Suggested Direction"))")
                     .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
 
             if observationDetail(session, title: "Key Signals") != "Pending" {
                 Text("Key signals: \(observationDetail(session, title: "Key Signals"))")
                     .font(.caption2)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -275,7 +344,7 @@ struct ObservatoryScreen: View {
             Text(observationDetail(session, title: "Arc Title"))
                 .font(.title3)
                 .bold()
-                .foregroundStyle(SecondTheme.primaryText)
+                .foregroundStyle(ObservatoryTheme.primaryText)
 
             MetricRow(label: "Start", value: observationDetail(session, title: "Arc Start"))
             MetricRow(label: "Middle", value: observationDetail(session, title: "Arc Middle"))
@@ -283,121 +352,165 @@ struct ObservatoryScreen: View {
 
             Text(observationDetail(session, title: "Reflection Arc"))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             let keyEvents = observationDetail(session, title: "Arc Key Events")
             if keyEvents != "Pending" && !keyEvents.isEmpty {
                 Text("Evidence: \(keyEvents)")
                     .font(.caption2)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
         }
     }
 
-    private enum TranscriptRow: Identifiable {
-        case utterance(TranscriptEvent)
-        case pause(id: UUID, duration: TimeInterval)
-
-        var id: UUID {
-            switch self {
-            case .utterance(let event): return event.id
-            case .pause(let id, _): return id
-            }
-        }
-    }
-
-    private func transcriptRows(for session: ReflectionSession) -> [TranscriptRow] {
-        let longPauseThreshold: TimeInterval = 10.0
-
+    /// `referenceEnd` stands in for "whatever comes next" when a pause is
+    /// the most recent thing in the transcript -- i.e. the person paused and
+    /// hasn't spoken again yet, whether still recording or the reflection
+    /// ended mid-pause. Previously this fell back to `Date.distantFuture`,
+    /// which produced a nonsense multi-billion-minute duration (the actual
+    /// bug behind a pause marker showing something like "quiet ·
+    /// 1038448677m 4s" and never changing, since it's a fixed math error, not
+    /// a real elapsed time). Callers pass `Date()` for a live session (so the
+    /// pause duration reflects real elapsed time as of this render) or the
+    /// session's actual `endedAt` for a completed one (so a reflection that
+    /// ended on a pause shows the real duration up to when it was stopped,
+    /// not "now").
+    private func transcriptView(_ session: ReflectionSession, referenceEnd: Date) -> some View {
         let events = session.transcript.sorted { $0.timestamp < $1.timestamp }
         let gaps = session.observationEvents
             .filter { $0.kind == .pauseGap }
             .sorted { $0.timestamp < $1.timestamp }
 
-        var rows: [TranscriptRow] = []
-        var gapIndex = 0
-
-        for (index, event) in events.enumerated() {
-            rows.append(.utterance(event))
-
-            let nextTimestamp = index + 1 < events.count ? events[index + 1].timestamp : Date.distantFuture
-            while gapIndex < gaps.count,
-                  gaps[gapIndex].timestamp >= event.timestamp,
-                  gaps[gapIndex].timestamp < nextTimestamp {
-                let gapEvent = gaps[gapIndex]
-                let duration = nextTimestamp.timeIntervalSince(gapEvent.timestamp)
-                if duration > 0 {
-                    rows.append(.pause(id: gapEvent.id, duration: duration))
-                }
-                gapIndex += 1
-            }
-        }
-
-        return rows
-    }
-
-    private func transcriptView(_ session: ReflectionSession) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if session.transcript.isEmpty {
+        return VStack(alignment: .leading, spacing: 14) {
+            if events.isEmpty {
                 Text(store.isRecording ? "Listening..." : "No transcript captured.")
                     .font(.subheadline)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             } else {
-                ForEach(transcriptRows(for: session)) { row in
-                    switch row {
-                    case .utterance(let event):
-                        HStack(alignment: .top, spacing: 12) {
-                            Text(event.timestamp.shortTimeWithSeconds)
-                                .font(.caption2)
-                                .foregroundStyle(SecondTheme.secondaryText)
-                                .frame(width: 78, alignment: .leading)
+                ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
+                    let windowEnd = index + 1 < events.count ? events[index + 1].timestamp : max(referenceEnd, event.timestamp)
+                    let windowGaps = gaps.filter { $0.timestamp >= event.timestamp && $0.timestamp < windowEnd }
 
-                            Text(event.speaker.rawValue)
-                                .font(.caption)
-                                .bold()
-                                .foregroundStyle(SecondTheme.primaryText)
-                                .frame(width: 38, alignment: .leading)
+                    HStack(alignment: .top, spacing: 12) {
+                        Text(event.timestamp.shortTimeWithSeconds)
+                            .font(.caption2)
+                            .foregroundStyle(ObservatoryTheme.secondaryText)
+                            .frame(width: 78, alignment: .leading)
 
-                            Text(event.text)
-                                .font(.subheadline)
-                                .foregroundStyle(SecondTheme.primaryText)
-                        }
-                    case .pause(_, let duration):
-                        pauseIndicator(duration: duration)
+                        Text(event.speaker.rawValue)
+                            .font(.caption)
+                            .bold()
+                            .foregroundStyle(ObservatoryTheme.primaryText)
+                            .frame(width: 38, alignment: .leading)
+
+                        inlineTranscriptText(event: event, gaps: windowGaps, windowEnd: windowEnd)
                     }
                 }
             }
         }
     }
 
-    private func pauseIndicator(duration: TimeInterval) -> some View {
-        let longPauseThreshold: TimeInterval = 10.0
+    /// Builds one wrapped paragraph for an utterance with pause markers
+    /// embedded directly between the words they actually fell between.
+    ///
+    /// Built as a single `AttributedString` with styled runs, converted to
+    /// one `Text` at the end -- NOT via SwiftUI `Text` concatenation (`+`),
+    /// which this used originally. That version rebuilt an ever-growing tree
+    /// of individually-styled `Text` values (two per word: the word plus a
+    /// separator) from scratch on every transcript update, and SwiftUI's
+    /// `Text` concatenation scales badly with tree size -- confirmed to
+    /// freeze the app once a single continuous utterance (no long-enough
+    /// pause to start a new one) grew past roughly a minute of speech.
+    /// Removing an earlier per-second `TimelineView` tick around this (see
+    /// `liveTranscriptCard`'s doc comment) only delayed the point this got
+    /// expensive enough to freeze -- the transcript updates on every
+    /// recognized word regardless of any timer, so the real fix has to be
+    /// making a single render cheap at any length, not rendering less often.
+    /// Building one `AttributedString` and handing SwiftUI one `Text` avoids
+    /// the concatenation-tree cost entirely.
+    ///
+    /// Previously (before word-level timing existed at all) every pause in
+    /// an utterance's window rendered as its own full-width row positioned
+    /// after the *entire* utterance, regardless of which word it actually
+    /// interrupted -- so a five-pause reflection showed all five pause
+    /// markers clustered together at the end of the text block, not at the
+    /// points in the sentence where they happened. Word-level timing
+    /// (`TranscriptEvent.words`) is what makes placing each one correctly
+    /// possible.
+    private func inlineTranscriptText(event: TranscriptEvent, gaps: [ObservationEvent], windowEnd: Date) -> Text {
+        guard !event.words.isEmpty else {
+            // No word-level timing on this entry (older saved reflection, or
+            // a non-transcript marker) -- fall back to showing every pause
+            // in the window after the whole utterance, same as before word
+            // timing existed.
+            var attributed = plainRun(event.text)
+            var lastShown: Date?
+            for gap in gaps {
+                if let lastShown, gap.timestamp.timeIntervalSince(lastShown) < 0.5 { continue }
+                let duration = gap.duration ?? windowEnd.timeIntervalSince(gap.timestamp)
+                guard duration > 0 else { continue }
+                attributed += pauseSpan(duration)
+                lastShown = gap.timestamp
+            }
+            return Text(attributed)
+        }
 
-        return Group {
-            if duration >= longPauseThreshold {
-                HStack(spacing: 8) {
-                    VStack { Divider() }
-                    Text("quiet · \(formattedGapDuration(duration))")
-                        .font(.caption2)
-                        .foregroundStyle(SecondTheme.secondaryText)
-                        .fixedSize()
-                    VStack { Divider() }
+        var attributed = AttributedString()
+        var lastShownGapTimestamp: Date?
+
+        for (index, word) in event.words.enumerated() {
+            if index > 0 {
+                attributed += AttributedString(" ")
+            }
+            attributed += plainRun(word.text)
+
+            let nextWordStart = index + 1 < event.words.count ? event.words[index + 1].start : windowEnd
+
+            for gap in gaps where gap.timestamp >= word.end && gap.timestamp < nextWordStart {
+                // Two independent detectors (utterance-timestamp-based and
+                // acoustic) can each record their own event for the same
+                // real pause. Treat gaps starting within half a second of
+                // the last one shown as the same physical pause rather than
+                // showing two markers for one silence.
+                if let lastShownGapTimestamp, gap.timestamp.timeIntervalSince(lastShownGapTimestamp) < 0.5 {
+                    continue
                 }
-                .padding(.vertical, 2)
-            } else {
-                HStack(spacing: 12) {
-                    Text("")
-                        .frame(width: 78, alignment: .leading)
 
-                    Text("···  \(formattedGapDuration(duration)) pause")
-                        .font(.caption2)
-                        .italic()
-                        .foregroundStyle(SecondTheme.secondaryText.opacity(0.8))
-
-                    Spacer()
-                }
+                // Use the duration actually measured when this pause was
+                // detected (`ObservationEvent.duration`); only fall back to
+                // inferring one from surrounding word timing for an older
+                // event that predates that field.
+                let duration = gap.duration ?? nextWordStart.timeIntervalSince(gap.timestamp)
+                guard duration > 0 else { continue }
+                attributed += pauseSpan(duration)
+                lastShownGapTimestamp = gap.timestamp
             }
         }
+
+        return Text(attributed)
+    }
+
+    private func plainRun(_ text: String) -> AttributedString {
+        var run = AttributedString(text)
+        run.font = .subheadline
+        run.foregroundColor = ObservatoryTheme.primaryText
+        return run
+    }
+
+    private func pauseSpan(_ duration: TimeInterval) -> AttributedString {
+        let label = "  ···  \(formattedGapDuration(duration)) pause  ···  "
+        var run = AttributedString(label)
+        // Long pauses (10s+) stay visually distinct -- bold rather than a
+        // separate full-width divider row, since a divider can't be part of
+        // the same flowing paragraph as the surrounding words.
+        if duration >= 10 {
+            run.font = .caption.bold().italic()
+            run.foregroundColor = ObservatoryTheme.secondaryText
+        } else {
+            run.font = .caption2.italic()
+            run.foregroundColor = ObservatoryTheme.secondaryText.opacity(0.8)
+        }
+        return run
     }
 
     private func formattedGapDuration(_ seconds: TimeInterval) -> String {
@@ -415,11 +528,11 @@ struct ObservatoryScreen: View {
             Text(observationDetail(session, title: "Trajectory Title"))
                 .font(.subheadline)
                 .bold()
-                .foregroundStyle(SecondTheme.primaryText)
+                .foregroundStyle(ObservatoryTheme.primaryText)
 
             Text(observationDetail(session, title: "Emotional Trajectory"))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             MetricRow(label: "Movement", value: observationDetail(session, title: "Trajectory Movement"))
             MetricRow(label: "Start", value: observationDetail(session, title: "Trajectory Start"))
@@ -430,23 +543,23 @@ struct ObservatoryScreen: View {
             sectionTitle("Observation Events")
             Text(ObservationEventEngine.eventSummary(session.observationEvents))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             if session.observationEvents.isEmpty {
                 Text("No micro-observation events recorded.")
                     .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             } else {
                 ForEach(ObservationEventEngine.groupedEvents(session.observationEvents), id: \.category) { group in
                     VStack(alignment: .leading, spacing: 8) {
                         Text("\(group.category.rawValue) (\(group.events.count))")
                             .font(.subheadline)
                             .bold()
-                            .foregroundStyle(SecondTheme.primaryText)
+                            .foregroundStyle(ObservatoryTheme.primaryText)
 
                         Text(ObservationEventEngine.categorySummary(group.category, events: group.events))
                             .font(.caption)
-                            .foregroundStyle(SecondTheme.secondaryText)
+                            .foregroundStyle(ObservatoryTheme.secondaryText)
 
                         ForEach(group.events.prefix(5)) { event in
                             observationEventDetail(event)
@@ -460,18 +573,18 @@ struct ObservatoryScreen: View {
             sectionTitle("Dynamics")
             Text(DynamicsEngine.summary(session.dynamicsPatterns))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             ForEach(session.dynamicsPatterns) { pattern in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(pattern.title)
                         .font(.caption)
                         .bold()
-                        .foregroundStyle(SecondTheme.primaryText)
+                        .foregroundStyle(ObservatoryTheme.primaryText)
 
                     Text(pattern.detail)
                         .font(.caption2)
-                        .foregroundStyle(SecondTheme.secondaryText)
+                        .foregroundStyle(ObservatoryTheme.secondaryText)
                 }
             }
 
@@ -480,18 +593,18 @@ struct ObservatoryScreen: View {
             sectionTitle("Correlations")
             Text(CorrelationEngine.summary(session.observationCorrelations))
                 .font(.caption)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             ForEach(session.observationCorrelations) { correlation in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(correlation.title)
                         .font(.caption)
                         .bold()
-                        .foregroundStyle(SecondTheme.primaryText)
+                        .foregroundStyle(ObservatoryTheme.primaryText)
 
                     Text(correlation.summary)
                         .font(.caption2)
-                        .foregroundStyle(SecondTheme.secondaryText)
+                        .foregroundStyle(ObservatoryTheme.secondaryText)
                 }
             }
         }
@@ -502,16 +615,16 @@ struct ObservatoryScreen: View {
             Text("\(event.timestamp.shortTimeWithSeconds) • \(event.title)")
                 .font(.caption)
                 .bold()
-                .foregroundStyle(SecondTheme.primaryText)
+                .foregroundStyle(ObservatoryTheme.primaryText)
 
             Text(event.detail)
                 .font(.caption2)
-                .foregroundStyle(SecondTheme.secondaryText)
+                .foregroundStyle(ObservatoryTheme.secondaryText)
 
             if let related = event.relatedText, !related.isEmpty {
                 Text("Related: \(related)")
                     .font(.caption2)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
                     .lineLimit(2)
             }
 
@@ -519,7 +632,7 @@ struct ObservatoryScreen: View {
                 Text("Other readings: " + event.alternativeExplanations.joined(separator: " · "))
                     .font(.caption2)
                     .italic()
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
                     .lineLimit(3)
             }
         }
@@ -555,11 +668,22 @@ struct ObservatoryScreen: View {
 
                 Text("Body signals from \(session.biometrics.queryStart.shortTimeWithSeconds)–\(session.biometrics.queryEnd.shortTimeWithSeconds)")
                     .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
 
-                Text("No biometric samples attached to this session yet. Watch and HealthKit will be connected in a later build.")
-                    .font(.caption)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                if session.biometrics.samples.isEmpty {
+                    Text("No Health data was found for this reflection's time window -- either Health access hasn't been granted (see Settings), or there's no heart rate, HRV, or respiratory data recorded for this window.")
+                        .font(.caption)
+                        .foregroundStyle(ObservatoryTheme.secondaryText)
+                } else {
+                    MetricRow(
+                        label: "Latest heart rate",
+                        value: "\(Int(session.biometrics.latestHeartRate.rounded())) BPM"
+                    )
+                    MetricRow(
+                        label: "Samples",
+                        value: "\(session.biometrics.samples.count)"
+                    )
+                }
 
                 MetricRow(label: "Data quality", value: session.biometrics.quality.rawValue.capitalized)
             }
@@ -572,7 +696,7 @@ struct ObservatoryScreen: View {
         Text(text)
             .font(.subheadline)
             .bold()
-            .foregroundStyle(SecondTheme.primaryText)
+            .foregroundStyle(ObservatoryTheme.primaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 

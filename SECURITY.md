@@ -1,6 +1,6 @@
 # Security & Privacy
 
-WayReally records audio of personal, often unguarded, spoken reflections. This document describes how that data is handled.
+Observatory records audio of personal, often unguarded, spoken reflections. This document describes how that data is handled.
 
 ## What is recorded
 

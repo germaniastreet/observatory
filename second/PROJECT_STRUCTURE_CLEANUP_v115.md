@@ -50,7 +50,7 @@ Future archives should be ZIP files only and should live outside the active Git 
 Recommended external archive folder:
 
 ```text
-Documents/WayReally Archives/
+Documents/Observatory Archives/
 ```
 
 or, if keeping the current name temporarily:
@@ -63,12 +63,12 @@ Each archive should contain one clean working project snapshot, not previous arc
 
 ## Rename policy
 
-The project is still named `second` at the Xcode target level. The display name shown to users has already been updated to WayReally. Renaming the underlying Xcode project/target/source-folder names to `WayReally` should be handled as a separate controlled version because it affects project names, schemes, bundle identifiers, signing, and documentation.
+The project is still named `second` at the Xcode target level. The display name shown to users has already been updated to Observatory. Renaming the underlying Xcode project/target/source-folder names to `Observatory` should be handled as a separate controlled version because it affects project names, schemes, bundle identifiers, signing, and documentation.
 
 Recommended future version:
 
 ```text
-v116 — Project Rename to WayReally
+v116 — Project Rename to Observatory
 ```
 
 Only proceed after confirming the v115 cleaned structure builds.

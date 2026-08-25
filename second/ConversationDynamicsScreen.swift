@@ -15,7 +15,7 @@ struct ConversationDynamicsScreen: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                SecondTheme.background.ignoresSafeArea()
+                ObservatoryTheme.background.ignoresSafeArea()
 
                 ScrollView {
                     VStack(spacing: 16) {
@@ -29,7 +29,7 @@ struct ConversationDynamicsScreen: View {
                                 AppCard(title: "Single-Speaker Reflection") {
                                     Text("Only one speaker was detected in this reflection. Observatory currently transcribes your own speech only — identifying a second speaker hasn't been built yet (planned for a future version). This isn't a failed measurement; it's an accurate result for what the app can currently detect.")
                                         .font(.caption)
-                                        .foregroundStyle(SecondTheme.secondaryText)
+                                        .foregroundStyle(ObservatoryTheme.secondaryText)
                                 }
                                 .padding(.horizontal)
                             }
@@ -42,7 +42,7 @@ struct ConversationDynamicsScreen: View {
 
                                     Text("\(session.timeRangeText) • \(session.durationText)")
                                         .font(.caption)
-                                        .foregroundStyle(SecondTheme.secondaryText)
+                                        .foregroundStyle(ObservatoryTheme.secondaryText)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -51,7 +51,7 @@ struct ConversationDynamicsScreen: View {
                             AppCard(title: "No Reflection Available") {
                                 Text("Record a reflection first. Turn-taking and speaking-share data will appear here once a transcript is available.")
                                     .font(.subheadline)
-                                    .foregroundStyle(SecondTheme.secondaryText)
+                                    .foregroundStyle(ObservatoryTheme.secondaryText)
                             }
                             .padding(.horizontal)
                         }
@@ -69,11 +69,11 @@ struct ConversationDynamicsScreen: View {
                     VStack(alignment: .leading) {
                         Text("You")
                             .font(.caption)
-                            .foregroundStyle(SecondTheme.secondaryText)
+                            .foregroundStyle(ObservatoryTheme.secondaryText)
                         Text("\(Int(d.userSpeakingPercent))%")
                             .font(.largeTitle)
                             .bold()
-                            .foregroundStyle(SecondTheme.heartRate)
+                            .foregroundStyle(ObservatoryTheme.heartRate)
                     }
 
                     Spacer()
@@ -85,17 +85,17 @@ struct ConversationDynamicsScreen: View {
                     VStack(alignment: .trailing) {
                         Text("They")
                             .font(.caption)
-                            .foregroundStyle(SecondTheme.secondaryText)
+                            .foregroundStyle(ObservatoryTheme.secondaryText)
                         Text("\(Int(d.otherSpeakingPercent))%")
                             .font(.largeTitle)
                             .bold()
-                            .foregroundStyle(SecondTheme.respiration)
+                            .foregroundStyle(ObservatoryTheme.respiration)
                     }
                 }
 
                 Text("Estimated from transcript word share, not timed audio.")
                     .font(.caption2)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
             }
         }
         .padding(.horizontal)
@@ -104,11 +104,11 @@ struct ConversationDynamicsScreen: View {
     private func turnTakingCard(_ d: ConversationDynamics) -> some View {
         AppCard(title: "Turn Taking") {
             HStack {
-                SignalBadge(icon: "arrow.left.arrow.right", title: "Turns", value: "\(d.turnsTaken)", color: SecondTheme.heartRate)
+                SignalBadge(icon: "arrow.left.arrow.right", title: "Turns", value: "\(d.turnsTaken)", color: ObservatoryTheme.heartRate)
                 Spacer()
-                SignalBadge(icon: "timer", title: "Avg Turn", value: String(format: "%.0fs", d.averageTurnLength), color: SecondTheme.amber)
+                SignalBadge(icon: "timer", title: "Avg Turn", value: String(format: "%.0fs", d.averageTurnLength), color: ObservatoryTheme.amber)
                 Spacer()
-                SignalBadge(icon: "chart.bar", title: "Dominance", value: String(format: "%.2f", d.dominanceIndex), color: SecondTheme.gold)
+                SignalBadge(icon: "chart.bar", title: "Dominance", value: String(format: "%.2f", d.dominanceIndex), color: ObservatoryTheme.gold)
             }
         }
         .padding(.horizontal)
@@ -121,15 +121,15 @@ struct RingPercentView: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(SecondTheme.border, lineWidth: 16)
+            Circle().stroke(ObservatoryTheme.border, lineWidth: 16)
             Circle()
                 .trim(from: 0, to: min(max(percent, 0), 1))
-                .stroke(SecondTheme.heartRate, style: StrokeStyle(lineWidth: 16, lineCap: .round))
+                .stroke(ObservatoryTheme.heartRate, style: StrokeStyle(lineWidth: 16, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             VStack {
                 Text("Duration")
                     .font(.caption2)
-                    .foregroundStyle(SecondTheme.secondaryText)
+                    .foregroundStyle(ObservatoryTheme.secondaryText)
                 Text(centerLabel)
                     .font(.headline)
                     .bold()
