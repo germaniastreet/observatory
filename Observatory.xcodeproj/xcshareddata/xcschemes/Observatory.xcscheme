@@ -30,7 +30,7 @@
       shouldUseLaunchSchemeArgsEnv = "YES">
       <TestPlans>
          <TestPlanReference
-            reference = "container:second.xctestplan"
+            reference = "container:Observatory.xctestplan"
             default = "YES">
          </TestPlanReference>
       </TestPlans>

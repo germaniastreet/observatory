@@ -145,8 +145,16 @@ final class ReflectionSessionStore: ObservableObject {
         // gaps at or past `transcriptIndices.count` are new -- earlier ones
         // were already recorded on a previous call, since this whole
         // utterance list is re-delivered every time.
-        if utterances.count > 1 {
-            for index in max(1, transcriptIndices.count)..<utterances.count {
+        //
+        // `startIndex` can land at or past `utterances.count` -- e.g. if a
+        // segment rollover ever re-delivers a shorter utterance list than a
+        // previous call already recorded against -- in which case there are
+        // no new gaps to emit, not a backwards range. `startIndex..<utterances.count`
+        // would otherwise trap with "Range requires lowerBound <= upperBound"
+        // in exactly that case, which is what crashed a lengthy reflection.
+        let startIndex = max(1, transcriptIndices.count)
+        if utterances.count > 1, startIndex < utterances.count {
+            for index in startIndex..<utterances.count {
                 let gap = utterances[index].start.timeIntervalSince(utterances[index - 1].end)
                 guard gap >= minimumObservablePause else { continue }
 

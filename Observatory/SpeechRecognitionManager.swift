@@ -314,7 +314,7 @@ final class SpeechRecognitionManager: ObservableObject {
             forName: AVAudioSession.interruptionNotification,
             object: AVAudioSession.sharedInstance(),
             queue: .main
-        ) { notification in
+        ) { [weak self] notification in
             // Pulled out here, before crossing into the Task below, since
             // Notification itself isn't Sendable -- only these two plain
             // values (an enum and a UInt) need to cross that boundary.
@@ -371,11 +371,31 @@ final class SpeechRecognitionManager: ObservableObject {
         return true
     }
 
+    private static let hasPromptedMicModeKey = "SpeechRecognitionManager.hasPromptedMicMode"
+
     func start(
         audioFileName: String,
         onTranscript: @escaping @MainActor ([Utterance]) -> Void,
         onSilenceGap: (@MainActor (Date, TimeInterval) -> Void)? = nil
     ) {
+        // This app wants exactly one speaker -- the person reflecting --
+        // and nothing else. Single-speaker isolation is left entirely to
+        // system Mic Mode (Control Center) rather than also applying the
+        // audio engine's own voice-processing unit in `beginListeningSegment`
+        // -- doing both stacked double-processing the signal and measurably
+        // hurt SFSpeechRecognizer's accuracy. Mic Mode is user-owned and
+        // read-only to apps (`preferredMicrophoneMode` has no setter), so
+        // this can only ask once, not force it: the first time a reflection
+        // starts without "Voice Isolation" already selected, surface the
+        // system's own Mic Mode picker so switching to it is one tap. After
+        // that it defers to whatever the person chose, rather than
+        // re-prompting on every single recording.
+        if AVCaptureDevice.preferredMicrophoneMode != .voiceIsolation,
+           !UserDefaults.standard.bool(forKey: Self.hasPromptedMicModeKey) {
+            UserDefaults.standard.set(true, forKey: Self.hasPromptedMicModeKey)
+            AVCaptureDevice.showSystemUserInterface(.microphoneModes)
+        }
+
         currentOnTranscript = onTranscript
         currentOnSilenceGap = onSilenceGap
         sealedUtterances = []
@@ -430,13 +450,44 @@ final class SpeechRecognitionManager: ObservableObject {
 
         do {
             let audioSession = AVAudioSession.sharedInstance()
+            // `.measurement`, not `.default`: this disables the system's
+            // automatic gain adjustment on the incoming signal, which is
+            // exactly what Apple's own SFSpeechRecognizer + AVAudioEngine
+            // sample code uses, and not incidentally -- recognition accuracy
+            // was confirmed in testing to suffer under `.default` and its
+            // extra signal processing, on top of whatever the system Mic
+            // Mode already applies. The tradeoff is the mic will again sound
+            // quieter at the signal level than `.default` (no AGC boost),
+            // which was the original complaint this app started from -- but
+            // actually understanding what was said matters more than how
+            // loud it registers.
             try audioSession.setCategory(.record, mode: .measurement, options: [.duckOthers])
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
 
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
+            // Without this, SFSpeechRecognizer returns one unbroken run-on
+            // phrase with no periods/commas at all -- the recognizer still
+            // "hears" the pauses (confirmed separately by SilenceTracker on
+            // the same buffers), it just doesn't mark them in the text
+            // unless asked to.
+            request.addsPunctuation = true
 
             let inputNode = audioEngine.inputNode
+
+            // Deliberately NOT using `inputNode.setVoiceProcessingEnabled`
+            // here. That audio unit's real-time ML noise suppression/echo
+            // cancellation/gating is tuned for human perceptual clarity on a
+            // phone call, not for feeding a speech recognizer -- it was
+            // confirmed in testing to make SFSpeechRecognizer miss words and
+            // mistranscribe what it did catch, stacked on top of whatever
+            // the system's own Mic Mode (Control Center) already applies
+            // upstream. Apple's own SFSpeechRecognizer sample code avoids
+            // voice processing for the same reason. Single-speaker isolation
+            // is left entirely to the system Mic Mode (see `start()` below),
+            // which the person can set to Voice Isolation themselves without
+            // this app double-processing the signal on top of it.
+
             let recordingFormat = inputNode.outputFormat(forBus: 0)
 
             if audioFile == nil, let pendingAudioFileURL {
@@ -488,7 +539,7 @@ final class SpeechRecognitionManager: ObservableObject {
             isRecording = true
             statusMessage = "Listening."
 
-            recognitionTask = speechRecognizer.recognitionTask(with: request) { result, error in
+            recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
                 Task { @MainActor [weak self] in
                     self?.handleRecognition(result: result, error: error)
                 }

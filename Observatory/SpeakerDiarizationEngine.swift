@@ -35,11 +35,18 @@ enum SpeakerDiarizationEngine {
     /// reflections were getting relabeled "Speaker A" because Pyannote
     /// briefly misread a breath, echo, or pitch shift in the *same* voice as
     /// a second speaker. An absolute floor alone can't tell "brief real
-    /// second speaker" from "brief misattribution," so this is raised back
+    /// second speaker" from "brief misattribution," so this was raised back
     /// up and paired with `minimumSpeakerProportion` below, which a
     /// momentary misattribution is much less likely to clear even if it
     /// happens to land above this duration floor.
-    private static let minimumSpeakerDuration: TimeInterval = 3.0
+    ///
+    /// Still not enough: a genuinely solo, lengthy reflection came back as
+    /// three labels ("You" plus two substantial "Speaker" clusters), both
+    /// clearing 3.0s/0.15. A long monologue has more room for prosodic drift
+    /// (pitch, energy, pacing shifting across minutes) to read as a second
+    /// voice than the short clips this was originally tuned against, so both
+    /// floors are raised again here.
+    private static let minimumSpeakerDuration: TimeInterval = 8.0
 
     /// A speaker must ALSO account for at least this fraction of the total
     /// substantial speaking time (across every speaker that clears
@@ -49,7 +56,7 @@ enum SpeakerDiarizationEngine {
     /// misattribution can clear an absolute duration floor on a long
     /// recording while still being a tiny sliver of the total, so duration
     /// alone (the only check before this) wasn't enough.
-    private static let minimumSpeakerProportion: Double = 0.15
+    private static let minimumSpeakerProportion: Double = 0.25
 
     /// Re-labels `session.transcript` by speaker, using the session's saved
     /// audio file. `diarizationEngineVersion` is set whenever diarization

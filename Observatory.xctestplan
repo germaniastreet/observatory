@@ -12,17 +12,17 @@
     "codeCoverage" : false,
     "performanceAntipatternCheckerEnabled" : true,
     "targetForVariableExpansion" : {
-      "containerPath" : "container:second.xcodeproj",
+      "containerPath" : "container:Observatory.xcodeproj",
       "identifier" : "381ED8A42FDB5CB200B1E569",
-      "name" : "second"
+      "name" : "Observatory"
     }
   },
   "testTargets" : [
     {
       "target" : {
-        "containerPath" : "container:second.xcodeproj",
+        "containerPath" : "container:Observatory.xcodeproj",
         "identifier" : "383DE4D630169D1900307A1A",
-        "name" : "secondTests"
+        "name" : "ObservatoryTests"
       }
     }
   ],

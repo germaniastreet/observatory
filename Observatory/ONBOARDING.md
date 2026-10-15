@@ -1,0 +1,61 @@
+# Observatory — Onboarding
+
+## Who this is for
+You have zero prior context on this project. This document exists so you don't have to re-derive it. Read this first, then follow the pointers below in order. Don't start editing code before you've read `PROJECT_CONSTRAINTS.md` — it's short and it's binding.
+
+## What Observatory is
+Observatory is an iOS app (SwiftUI, Swift 6) that records a person talking to themselves — a "reflection" — transcribes it on-device, and looks for patterns in what was said and how it was said. It is explicitly **not** a journaling app, a transcript viewer, or a diagnostic product (`PROJECT_CONSTRAINTS.md` #1). The long-term goal, as of this week, has sharpened specifically: **document and analyze emotion through *how* speech is expressed** — prolonged sounds, compressed/accelerated delivery, possible reduced articulation, changes in pitch/intensity — where the transcribed *words* are context, not the product. A person stretching a word may be expressing uncertainty; speeding up may accompany anger — but neither *proves* an emotion, and the product must never claim it does. That non-negotiable distinction (measured acoustic **observation** vs. tentative **interpretation** vs. optional user **self-report**) runs through everything described below.
+
+## Reading order
+1. `PROJECT_CONSTRAINTS.md` — binding product rules (evidence/provenance, no diagnosis, speaker-identity conservatism, signal libraries as data not code). If a change conflicts with this file, the change is wrong, not the file.
+2. `PROJECT_ARCHITECTURE.md` — how the code is actually organized (folder layout, naming conventions, data flow, storage schema, the engine layer). Written to always match the real code; if it ever doesn't, that's a bug in the doc, fix the doc.
+3. `PROJECT_GLOSSARY.md` — shared vocabulary. Skim it now, come back to it when a term is unfamiliar.
+4. `PRE_BUILD_CHECKLIST.md` — what to verify before shipping any version.
+5. This file's "Recent history" and "Active work" sections below, for what's actually in flight right now.
+
+## Project/repo facts worth knowing immediately
+- Xcode project: `Observatory.xcodeproj` at the repo root. Source target: `Observatory/`.
+- Bundle identifier is still `com.germaniastreet.second` / `com.germaniastreet.secondTests` — the app, project, target, and scheme were all renamed from "second"/WayReally to Observatory, but the bundle ID was deliberately left alone (changing it would be an App Store identity change, not a cosmetic rename).
+- No backend, no database — storage is JSON files + `.caf` audio files under the app's Application Support directory. No CoreData/SwiftData/SQLite. See `PROJECT_ARCHITECTURE.md` §6.
+- Package dependencies: `swift-argument-parser` (not really used by the app itself — check before assuming it's load-bearing) and `argmax-oss-swift` (provides `SpeakerKit`, Argmax's on-device Pyannote-based speaker diarization, and `WhisperKit`, used here only for its `AudioProcessor.loadAudioAsFloatArray` helper).
+- Tests: Swift Testing (`import Testing`, `@Suite`/`@Test`/`#expect`), not XCTest. One file today: `ObservatoryTests/ObservatoryTests.swift`.
+- GitHub remote: `https://github.com/germaniastreet/observatory.git`, branch `main`.
+
+## Recent history (the last several days, in order)
+This is a condensed narrative of real work, kept here because none of it was in `VERSION_HISTORY.txt` yet at the time of writing. Cross-reference `git log` for exact commits.
+
+1. **Stale reference cleanup** — the test plan (renamed `second.xctestplan` → `Observatory.xctestplan`) still internally referenced the old, nonexistent `second.xcodeproj`/`secondTests` target; fixed. Two Swift 6 concurrency warnings in `SpeechRecognitionManager.swift` (capture-list mismatches between an outer closure and a nested `Task { [weak self] }`) fixed the same way.
+2. **Audio session tuning saga** (`SpeechRecognitionManager.swift`) — this went through several real iterations, each one a genuine tradeoff, not a mistake chain:
+   - "Capture is weak" → traced to `.measurement` audio session mode disabling AGC → switched to `.default`.
+   - "Voice is haphazard, background bleeds through" → traced to the system Mic Mode (Control Center: Standard/Voice Isolation/Wide Spectrum) not being engaged under `.measurement`; added a one-time in-app prompt (`AVCaptureDevice.showSystemUserInterface(.microphoneModes)`) nudging toward Voice Isolation.
+   - "Focus on a single speaker" → tried enabling `AVAudioEngine`'s native Voice-Processing I/O (`setVoiceProcessingEnabled`) for in-app isolation independent of the system setting. This required switching the session category to `.playAndRecord` (fixed an `OSStatus -50` crash on start — Voice-Processing I/O needs an output route to initialize).
+   - "Words seldom recognized / inaccurate / incomplete" → voice processing + system Voice Isolation stacked was **double**-processing the signal with DSP tuned for human call clarity, not machine transcription, and it measurably hurt SFSpeechRecognizer's accuracy. **Reverted**: removed `setVoiceProcessingEnabled`, went back to `.record` + **`.measurement`** (matches Apple's own SFSpeechRecognizer sample code). Single-speaker isolation is now left entirely to the system Mic Mode, not duplicated in-app.
+   - Added `request.addsPunctuation = true` — without it, SFSpeechRecognizer returns one unbroken run-on phrase with no periods/commas at all.
+   - **Lesson embedded in the code as comments, not just in this doc**: read those comments before changing audio session settings again — several "obvious" fixes here directly undid an earlier, deliberate fix for a different symptom.
+3. **Crash fix** (`ReflectionSessionStore.swift`) — a lengthy reflection crashed with `Fatal error: Range requires lowerBound <= upperBound` in the pause-gap-detection loop. The loop assumed the live utterance list only ever grows across a segment rollover; it doesn't always. Fixed by guarding the range construction.
+4. **Diarization over-splitting** (`SpeakerDiarizationEngine.swift`) — a solo monologue got relabeled as three speakers. Existing duration/proportion floors (`minimumSpeakerDuration`, `minimumSpeakerProportion`) were raised (3.0s/0.15 → 8.0s/0.25) as an anecdote-driven stopgap — **this is explicitly flagged below as needing a real fix, not a threshold tweak**.
+5. **External review** — a separate ChatGPT-driven review inspected the actual source plus three real test recordings (saved transcripts + numeric audio measurements, not perceptual listening) and found concrete, confirmed defects: every saved word timestamp has `start == end` (callback-arrival time, not audio-derived); a real data race between `endAudio()` and the realtime audio-append path; no stale-callback rejection across segment rollovers; a final-result-without-error case that silently stops recognition continuation; synchronous file I/O on the realtime audio thread with swallowed errors; diarization matching a whole transcript event against a single wall-clock timestamp while RTTM segments are audio-file-relative. See `STABILIZATION_AND_EXPRESSION_PLAN.md` for the full writeup and the corrected plan.
+6. **Purpose clarification** — the user clarified Observatory's actual goal is analyzing *how* speech is expressed (prolongation, rate, articulation, pitch/intensity changes), not just transcript content. This promoted "expressive-speech analysis" from an explicitly-deferred future idea to a core, staged workstream — see the plan doc.
+
+## Active work: the stabilization + expression plan
+`STABILIZATION_AND_EXPRESSION_PLAN.md` (same folder as this file) is the current, approved-pending-implementation plan. Read it before touching `SpeechRecognitionManager.swift`, `SpeakerDiarizationEngine.swift`, or `ReflectionSessionStore.swift`. Short version:
+- **Stage 0**: fix recognition lifecycle (generation-tagged callbacks, deterministic final/error/stop/interruption handling, a real audio-frame timeline instead of callback-arrival timestamps, threaded/honest-failure audio writing, typed diarization segments instead of RTTM string-parsing).
+- **Stage 1**: a first real acoustic-expression *observation* slice, using Apple's on-device `SFVoiceAnalytics` (pitch/jitter/shimmer/voicing, already part of the Speech framework we already use) plus locally-derived speaking-rate/pause/intensity. Prolongation ships as an explicitly-labeled *candidate* signal; reduced-articulation/slurring ships as explicitly **unsupported** (no validated on-device detector exists — audio is preserved for manual review instead of a misleading label).
+- **Stage 2**: bounded, revisable *interpretation* linked back to its source observation, plus optional user self-report/correction, surfaced in a small evidence-linked UI timeline.
+
+## Process note: plans now get a second opinion before implementation
+For nontrivial changes, the development process now includes an explicit second-opinion pass: a plan is drafted, sent to ChatGPT for independent review, and revised based on real findings before implementation starts. This isn't a formality — the second-opinion pass on this exact stabilization plan caught genuine bugs in the first draft (a real data race, a broken fixture-validation approach, an unsafe backward-compatibility default). Expect to see this pattern in future plan documents and PR descriptions; it's a deliberate quality gate, not extra process for its own sake.
+
+## If you have NLP expertise (this is currently a gap on the team)
+Most of this codebase's "language" handling is simple keyword/phrase matching (`SignalLibraryDetectionEngine.swift`, `CognitiveObservationDetector.swift`, `ObservationEventEngine.swift`) — no embeddings, no language model, no real linguistic analysis. That's a known, explicit gap, and it's exactly where your perspective is most needed:
+- **`SpeakerDiarizationEngine.swift`**: currently matches diarization segments against transcript *events*, soon (Stage 0 of the plan) against individual *words*. Real NLP/phonetics judgment on how to handle word-vs-segment-boundary overlap, and how to represent genuinely ambiguous/simultaneous speech, would materially improve this.
+- **Stage 1 acoustic-expression work** (`SFVoiceAnalytics`-based pitch/jitter/shimmer, local speaking-rate, prolongation-candidate detection): the plan explicitly flags that "ASR word timings alone are not validated vowel-lengthening detection" and that word duration needs to account for phonetic content (syllable/phoneme count), phrase position, and local pace before it means anything. This is squarely a phonetics/NLP problem, not a software-engineering one — right now it's stubbed as a crude syllable-count heuristic, explicitly labeled experimental.
+- **Text normalization**: `SpeechRecognitionManager.utterances(from:)` reconstructs formatted transcript text from `SFTranscriptionSegment.substringRange` rather than raw per-word substrings, specifically because the raw reconstruction read as lower quality — there's likely more nuance here (punctuation placement interacting with the new `addsPunctuation` behavior, capitalization at utterance-split boundaries) worth a closer look.
+- **`PROJECT_CONSTRAINTS.md` #7** requires phrase/pattern/threshold logic to live in versioned, external "signal libraries," not hardcoded Swift — if you're designing new detection logic (acoustic or linguistic), it should extend `SignalLibraryModels.swift`'s existing rule schema rather than hardcode constants, the same way existing phrase-based rules do.
+
+## Where to start (both engineers)
+1. Clone the repo, open `Observatory.xcodeproj`, build (`Cmd+R`) on a real device — speech recognition and Mic Mode features don't behave the same in Simulator.
+2. Read `PROJECT_CONSTRAINTS.md`, then `PROJECT_ARCHITECTURE.md`, then this file's history/active-work sections above.
+3. Read `STABILIZATION_AND_EXPRESSION_PLAN.md` in full before writing any code against the speech pipeline.
+4. Run the existing test suite (`ObservatoryTests/ObservatoryTests.swift`) once, successfully, before changing anything — know what "green" looks like first.
+5. Ask about anything in `PROJECT_CONSTRAINTS.md` that seems to conflict with a request you're given — it's binding on purpose, and conflicts should be surfaced, not silently resolved either way.
