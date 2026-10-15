@@ -23,3 +23,6 @@
 | Provenance | Source, time, transformation, library/model version, and evidence chain behind an output. |
 | Analyst View | Expandable technical/evidence interface for inspection, research, coaching, or moderation. |
 | Primary View | Calm user-facing view focused on useful awareness and next steps. |
+| Acoustic Observation | A measured, evidence-linked property of *how* speech sounded (pitch, rate, prolongation candidate, intensity) — not a claim about what it means. Always has a playable source-audio interval, speaker/identity uncertainty, units, and a method/model version. |
+| Expression Interpretation | A tentative, bounded, revisable reading of one or more acoustic observations (e.g. "possible uncertainty") — never a single asserted emotion, always alongside alternative readings including "insufficient evidence." References the observation(s) it's derived from; is not itself evidence. |
+| Self-Report | An optional, explicitly user-provided correction or confirmation attached to an observation or interpretation. Distinct from both of the above — it's what the person says they felt, not something the system measured or inferred. |

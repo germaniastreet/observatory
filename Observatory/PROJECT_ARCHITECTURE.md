@@ -127,9 +127,28 @@ swappable without touching UI or storage code.
 | `EmotionalTrajectoryEngine` | EmotionalTrajectoryEngine.swift | Emotional trajectory across a reflection (or across sessions) |
 | `ReflectionSummaryEngine` | ReflectionSummaryEngine.swift | Human-readable summary text for a completed reflection |
 | `SignalLibraryDetectionEngine` | SignalLibraryDetectionEngine.swift | Matches transcript content against active `SignalLibrary` rules |
+| `SpeakerDiarizationEngine` | SpeakerDiarizationEngine.swift | Re-labels a finished session's transcript by speaker, using the saved `.caf` audio and Argmax's on-device SpeakerKit (Pyannote) — see section 7 for its network-access caveat |
 
-All ten are stateless enums with a version constant, per the naming
-convention above. None of them make network calls — see section 7.
+All eleven are stateless enums with a version constant, per the naming
+convention above. All but `SpeakerDiarizationEngine` make no network calls
+at all — see section 7 for why that one is the exception.
+
+## 8. Known issues / active work (as of 2026-10-15)
+
+The speech-capture pipeline (`SpeechRecognitionManager.swift`,
+`SpeakerDiarizationEngine.swift`, `ReflectionSessionStore.swift`) has known,
+confirmed defects that are not yet fixed in the running code: word timing is
+callback-arrival time rather than audio-derived (every saved word currently
+has `start == end`), there's a real data race between `endAudio()` and the
+realtime audio-append path, recognition callbacks carry no generation
+identity to reject stale results across a segment rollover, and diarization
+matches whole transcript events against a single wall-clock timestamp while
+the underlying RTTM segments are audio-file-relative. A full staged plan to
+fix these, plus a new acoustic-expression-observation workstream (measuring
+*how* speech is expressed — prolongation, rate, pitch/intensity — not just
+transcript content), is written up in `STABILIZATION_AND_EXPRESSION_PLAN.md`
+alongside this file. Read that document, and `ONBOARDING.md`'s "Recent
+history" section, before changing any of those three files.
 
 ## 5. How observations and evidence are produced and stored
 
@@ -217,7 +236,7 @@ entry in this document (a "Prompt Contracts" section, defining exactly
 what data leaves the device and why), and should not be added quietly
 inside an existing engine.
 
-## 8. What this document is not
+## 9. What this document is not
 
 This file describes the current, real structure of the code. It is not a
 roadmap and not a constraints document — see VERSION_HISTORY.txt for what

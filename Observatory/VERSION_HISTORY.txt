@@ -570,3 +570,76 @@ Tag: v115
 Status:
 
 Architecture / repository stabilization package prepared
+
+
+v116 — Rename to Observatory
+
+Date: 2026-07 (exact date not tagged)
+
+Major additions:
+
+- Completed the display name, Xcode project/target/scheme, and source
+  folder rename from "WayReally"/"second" to "Observatory"
+- Fixed stale entitlements path and documentation left over from the rename
+- Added HealthKit biometric backfill
+- Fixed a live-transcript freeze bug
+- Fixed stale "second/" path references and Swift 6 concurrency warnings
+  left over from the rename
+
+Important:
+
+- The bundle identifier was deliberately left unchanged
+  (com.germaniastreet.second / com.germaniastreet.secondTests) — this was
+  a cosmetic/organizational rename, not an App Store identity change.
+
+Status:
+
+Stable
+
+
+v117 — Speech capture pipeline: audio session tuning, crash fix, diarization threshold
+
+Date: 2026-10-12 to 2026-10-15
+
+This version is a sequence of real, hard-won tradeoffs in
+SpeechRecognitionManager.swift's audio session configuration, not a single
+feature. See ONBOARDING.md's "Recent history" section for the full
+narrative; summary:
+
+- Fixed weak mic capture (.measurement mode was disabling AGC) by
+  switching to .default, then reverted back to .measurement once it became
+  clear the AGC-enabled mode was hurting SFSpeechRecognizer's accuracy more
+  than it helped perceived loudness.
+- Added a one-time in-app nudge toward the system Voice Isolation Mic Mode
+  for single-speaker-focused capture, after trying (then reverting) the
+  audio engine's own Voice-Processing I/O, which double-processed the
+  signal on top of system Mic Mode and measurably hurt recognition.
+- Fixed an OSStatus -50 crash on start, encountered while the above
+  voice-processing experiment was active (needs .playAndRecord, not
+  .record, category) -- moot after the revert, documented anyway since the
+  underlying category/voice-processing interaction is a real constraint.
+- Added request.addsPunctuation = true -- SFSpeechRecognizer returns one
+  unbroken run-on phrase with no punctuation at all otherwise.
+- Fixed a crash ("Range requires lowerBound <= upperBound") in
+  ReflectionSessionStore.updateLiveTranscript's pause-gap-detection loop,
+  triggered by a lengthy reflection crossing a segment rollover.
+- Raised SpeakerDiarizationEngine's minimumSpeakerDuration/Proportion
+  floors (3.0s/0.15 -> 8.0s/0.25) after a solo monologue was relabeled as
+  three speakers -- flagged in STABILIZATION_AND_EXPRESSION_PLAN.md as an
+  anecdote-driven stopgap needing a real fix, not a permanent tuning.
+- Commissioned and incorporated an external (ChatGPT-assisted) review of
+  the speech pipeline against three real test recordings, which confirmed
+  deeper defects (word timing, lifecycle races, diarization matching) not
+  visible from symptom reports alone. See
+  STABILIZATION_AND_EXPRESSION_PLAN.md.
+- Clarified the product's actual purpose: analyzing *how* speech is
+  expressed (prolongation, rate, articulation, pitch/intensity), not just
+  transcript content -- promoting expressive-speech analysis from an
+  explicitly-deferred idea to a core, staged workstream.
+- Added ONBOARDING.md and STABILIZATION_AND_EXPRESSION_PLAN.md.
+
+Status:
+
+Known issues documented, fix plan written, implementation not yet started
+-- see STABILIZATION_AND_EXPRESSION_PLAN.md "Status" line for the current
+state.
