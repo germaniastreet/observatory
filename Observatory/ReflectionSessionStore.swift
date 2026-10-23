@@ -223,7 +223,17 @@ final class ReflectionSessionStore: ObservableObject {
         activeSession = session
     }
 
-    func stopAndObserve() {
+    /// `finishAudioCapture` lets the caller (which holds the
+    /// `SpeechRecognitionManager` this store never references directly)
+    /// supply a way to flush the background audio writer and collect its
+    /// reliability diagnostics. It's only awaited inside the diarization
+    /// `Task` below, not here -- this method still returns synchronously
+    /// and moves the session into `completedSessions` immediately, exactly
+    /// as before. The flush only needs to finish before diarization opens
+    /// the file, not before the UI shows the reflection as complete.
+    func stopAndObserve(
+        finishAudioCapture: @escaping () async -> (isReliable: Bool, missingAudioIntervals: [AudioInterval])? = { nil }
+    ) {
         guard var session = activeSession else { return }
 
         let end = Date()
@@ -315,8 +325,17 @@ final class ReflectionSessionStore: ObservableObject {
         // background step rather than blocking Stop & Observe. Every
         // transcript entry starts as `.user`; this only changes that if
         // diarization actually finds more than one voice.
-        let sessionForDiarization = session
+        var sessionForDiarization = session
         Task {
+            // Must finish before SpeakerDiarizationEngine ever opens the
+            // file below -- otherwise it could read a file shorter than
+            // what the background writer was still in the middle of
+            // accepting, even though every buffer would have eventually
+            // written successfully.
+            if let diagnostics = await finishAudioCapture() {
+                sessionForDiarization.audioRecordingReliable = diagnostics.isReliable
+                sessionForDiarization.missingAudioIntervals = diagnostics.missingAudioIntervals
+            }
             let labeled = await SpeakerDiarizationEngine.label(session: sessionForDiarization)
             self.applyDiarizedTranscript(labeled)
         }
@@ -330,11 +349,19 @@ final class ReflectionSessionStore: ObservableObject {
         if let index = completedSessions.firstIndex(where: { $0.id == labeled.id }) {
             completedSessions[index].transcript = labeled.transcript
             completedSessions[index].diarizationEngineVersion = labeled.diarizationEngineVersion
+            completedSessions[index].audioRecordingReliable = labeled.audioRecordingReliable
+            completedSessions[index].missingAudioIntervals = labeled.missingAudioIntervals
+            completedSessions[index].diarizationRawSegments = labeled.diarizationRawSegments
+            completedSessions[index].diarizationFilteringDecisions = labeled.diarizationFilteringDecisions
         }
 
         if activeSession?.id == labeled.id {
             activeSession?.transcript = labeled.transcript
             activeSession?.diarizationEngineVersion = labeled.diarizationEngineVersion
+            activeSession?.audioRecordingReliable = labeled.audioRecordingReliable
+            activeSession?.missingAudioIntervals = labeled.missingAudioIntervals
+            activeSession?.diarizationRawSegments = labeled.diarizationRawSegments
+            activeSession?.diarizationFilteringDecisions = labeled.diarizationFilteringDecisions
         }
     }
 

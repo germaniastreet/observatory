@@ -5,127 +5,152 @@ import WhisperKit // AudioProcessor.loadAudioAsFloatArray lives here, not in Spe
 /// Runs after a reflection is stopped, using the raw audio file saved by
 /// SpeechRecognitionManager to figure out which parts of the transcript came
 /// from different speakers. Uses Argmax's open-source SpeakerKit (Pyannote
-/// v4 community-1, on-device, MIT license -- see the multi-speaker capture
-/// research this was built from) -- entirely separate from live
+/// v4 community-1, on-device, MIT license) -- entirely separate from live
 /// transcription, which SFSpeechRecognizer already finished producing by the
 /// time this runs.
 ///
-/// Honesty note (PROJECT_CONSTRAINTS.md #5, #9): this only ever tells voices
+/// Honesty note (PROJECT_CONSTRAINTS.md #5, #8): this only ever tells voices
 /// apart -- it has no way to know which voice is the phone's owner, so a
 /// transcript stays entirely `.user` unless diarization actually finds more
-/// than one *distinct* voice. When it does, every entry (including the
-/// owner's) gets re-labeled as "Speaker 1", "Speaker 2", etc., since
-/// asserting one of them is specifically "You" would be presenting a guess
-/// as a fact.
-///
-/// IMPORTANT: this is the one file in Observatory built against a third-party
-/// package's exact API without a compiler available here to verify it. If
-/// Xcode reports a "has no member" or "cannot find type" error anywhere in
-/// this file, that's expected -- the fix is almost certainly a one- or
-/// two-line rename once the real member name is visible in the error.
+/// than one *distinct* voice. When it does, matched words get relabeled
+/// "Speaker 1"/"Speaker 2"/etc; genuinely simultaneous speech becomes
+/// `.overlap`, and speech that couldn't be matched to anyone becomes
+/// `.unknown` -- never silently asserted as the phone owner's once multiple
+/// voices are already known to exist in the session.
 enum SpeakerDiarizationEngine {
-    static let engineVersion = "0.4"
+    static let engineVersion = "0.5"
 
-    /// A speaker must account for at least this much total speaking time
-    /// (summed across every RTTM segment attributed to them) before they
-    /// count toward "more than one distinct speaker found."
+    /// A raw speaker ID must account for at least this much total speaking
+    /// time (summed across every segment SpeakerKit attributed to it)
+    /// before it counts toward "more than one distinct speaker found."
     ///
     /// History: started at 2.0s, lowered to 0.5s to catch brief participants
-    /// -- but 0.5s turned out to be far too permissive in practice: solo
-    /// reflections were getting relabeled "Speaker A" because Pyannote
-    /// briefly misread a breath, echo, or pitch shift in the *same* voice as
-    /// a second speaker. An absolute floor alone can't tell "brief real
-    /// second speaker" from "brief misattribution," so this was raised back
-    /// up and paired with `minimumSpeakerProportion` below, which a
-    /// momentary misattribution is much less likely to clear even if it
-    /// happens to land above this duration floor.
-    ///
-    /// Still not enough: a genuinely solo, lengthy reflection came back as
-    /// three labels ("You" plus two substantial "Speaker" clusters), both
-    /// clearing 3.0s/0.15. A long monologue has more room for prosodic drift
-    /// (pitch, energy, pacing shifting across minutes) to read as a second
-    /// voice than the short clips this was originally tuned against, so both
-    /// floors are raised again here.
+    /// -- too permissive: solo reflections were getting relabeled "Speaker
+    /// A" because Pyannote briefly misread a breath, echo, or pitch shift in
+    /// the *same* voice as a second speaker. Raised to 3.0s, paired with
+    /// `minimumSpeakerProportion` below. Still not enough on a lengthy solo
+    /// recording (prosodic drift over several minutes gave a momentary
+    /// misattribution enough room to clear both floors), so raised again to
+    /// 8.0s/0.25. Left unchanged in this version -- see
+    /// STABILIZATION_AND_EXPRESSION_PLAN.md on why further anecdote-driven
+    /// tuning isn't done here; `diarizationFilteringDecisions` below exists
+    /// so a future retuning pass has real numbers to work from instead of
+    /// another anecdote.
     private static let minimumSpeakerDuration: TimeInterval = 8.0
 
-    /// A speaker must ALSO account for at least this fraction of the total
-    /// substantial speaking time (across every speaker that clears
-    /// `minimumSpeakerDuration`) before they count as distinct. This is what
-    /// actually distinguishes "someone else spoke for a while" from "the
-    /// model briefly misattributed a few seconds of the same voice" -- a
-    /// misattribution can clear an absolute duration floor on a long
-    /// recording while still being a tiny sliver of the total, so duration
-    /// alone (the only check before this) wasn't enough.
+    /// A raw speaker ID must ALSO account for at least this fraction of the
+    /// total substantial speaking time (across every ID that clears
+    /// `minimumSpeakerDuration`) before it counts as distinct.
     private static let minimumSpeakerProportion: Double = 0.25
 
-    /// Re-labels `session.transcript` by speaker, using the session's saved
+    /// Re-labels `session.transcript` by speaker, at word granularity where
+    /// word-level audio offsets are available, using the session's saved
     /// audio file. `diarizationEngineVersion` is set whenever diarization
-    /// actually completes (successfully processed real audio into segments)
-    /// -- regardless of whether it found more than one distinct speaker --
-    /// so it means "this session has been checked," not "this session's
-    /// transcript got relabeled." Those are different things: a solo
-    /// reflection (the common case) is *supposed* to come back unrelabeled,
-    /// and before this it looked identical in Diagnostics to a reflection
-    /// where diarization never ran at all -- both showed "Not yet run,"
-    /// which made it impossible to tell "diarization is broken" from
-    /// "diarization worked and correctly found only one speaker." Stays nil
-    /// only for the cases where diarization genuinely couldn't be attempted
-    /// or failed: no audio file, missing audio file, no parseable segments,
-    /// or a thrown error.
+    /// actually completes -- regardless of whether it found more than one
+    /// distinct speaker -- so it means "this session has been checked," not
+    /// "this session's transcript got relabeled." Stays nil when diarization
+    /// couldn't be attempted or failed: no audio file, missing audio file,
+    /// audio known to be unreliable (see `ReflectionSession.audioRecordingReliable`),
+    /// no parseable segments, or a thrown error.
     static func label(session: ReflectionSession) async -> ReflectionSession {
+        guard let audioFileName = session.audioFileName else { return session }
+        return await label(session: session, audioURL: Self.audioFileURL(named: audioFileName))
+    }
+
+    /// Same as `label(session:)`, but against an explicit audio URL instead
+    /// of resolving `session.audioFileName` against the production
+    /// `Application Support/Observatory/Audio` directory. Exists so tests
+    /// (the fixture replay harness) can exercise this exact diarization
+    /// logic against test-bundle audio without ever touching, copying into,
+    /// or depending on the live production audio directory -- writing a
+    /// test fixture into that directory is what caused real reflection
+    /// audio to be lost. Production code only ever calls the convenience
+    /// overload above; this is the one and only diarization implementation.
+    static func label(session: ReflectionSession, audioURL: URL) async -> ReflectionSession {
         var session = session
 
-        guard let audioFileName = session.audioFileName else { return session }
-        let audioURL = Self.audioFileURL(named: audioFileName)
         guard FileManager.default.fileExists(atPath: audioURL.path) else { return session }
+
+        // The background audio writer flagged this file as missing or
+        // incomplete relative to what was actually recognized -- diarizing
+        // it would silently present speaker attribution against data known
+        // to be short of the truth. `nil` (unknown/legacy) is still allowed
+        // through; only an explicit `false` blocks this.
+        guard session.audioRecordingReliable != false else { return session }
 
         do {
             let audioArray = try AudioProcessor.loadAudioAsFloatArray(fromPath: audioURL.path)
             let speakerKit = try await SpeakerKit()
             let result = try await speakerKit.diarize(audioArray: audioArray)
 
-            let segments = Self.parseSegments(from: result, fileName: audioFileName)
+            let segments = result.segments
             guard !segments.isEmpty else { return session }
 
             // Diarization genuinely ran and produced real segments -- mark
             // this session as checked now, before the distinct-speaker
             // filtering below, so a single-speaker result (which correctly
-            // leaves the transcript untouched) still reads as "checked,"
-            // not "never attempted."
+            // leaves the transcript untouched) still reads as "checked," not
+            // "never attempted."
             session.diarizationEngineVersion = engineVersion
+            session.diarizationRawSegments = segments.map {
+                RawDiarizationSegment(
+                    startTime: TimeInterval($0.startTime),
+                    endTime: TimeInterval($0.endTime),
+                    speakerDescription: Self.describe($0.speaker)
+                )
+            }
 
-            // A recording with exactly one voice can still produce more than
-            // one RTTM segment (the same speaker turning on and off) -- so
-            // checking segment *count* alone (the previous behavior) could
-            // relabel a single-speaker session away from `.user` just
-            // because diarization emitted multiple same-speaker segments.
+            let singleSpeakerSegments: [(id: Int, start: TimeInterval, end: TimeInterval)] = segments.compactMap { segment in
+                guard case .speakerId(let id) = segment.speaker else { return nil }
+                return (id, TimeInterval(segment.startTime), TimeInterval(segment.endTime))
+            }
+            let multiSpeakerSegments: [(start: TimeInterval, end: TimeInterval)] = segments.compactMap { segment in
+                guard case .multiple = segment.speaker else { return nil }
+                return (TimeInterval(segment.startTime), TimeInterval(segment.endTime))
+            }
+
             // What actually matters is whether more than one *distinct*
-            // speaker identifier was found -- and, per minimumSpeakerDuration
-            // and minimumSpeakerProportion above, whether that identifier
-            // represents real, sustained speech from a genuinely separate
-            // person rather than a momentary misattribution within one
-            // person's voice.
-            let totalDurationByLabel = Dictionary(grouping: segments, by: \.label)
+            // speaker ID represents real, sustained speech from a genuinely
+            // separate person, not a momentary misattribution within one
+            // person's voice -- see minimumSpeakerDuration/Proportion above.
+            let totalDurationByID = Dictionary(grouping: singleSpeakerSegments, by: \.id)
                 .mapValues { $0.reduce(0) { $0 + ($1.end - $1.start) } }
-            let totalSubstantialDuration = totalDurationByLabel.values
+            let totalSubstantialDuration = totalDurationByID.values
                 .filter { $0 >= minimumSpeakerDuration }
                 .reduce(0, +)
-            let substantialSegments = segments.filter { segment in
-                let labelDuration = totalDurationByLabel[segment.label] ?? 0
-                guard labelDuration >= minimumSpeakerDuration else { return false }
-                guard totalSubstantialDuration > 0 else { return false }
-                return (labelDuration / totalSubstantialDuration) >= minimumSpeakerProportion
-            }
-            let distinctSpeakers = Set(substantialSegments.map(\.label))
-            guard distinctSpeakers.count >= 2 else { return session }
 
-            session.transcript = session.transcript.map { event in
-                var event = event
-                let offset = event.timestamp.timeIntervalSince(session.startedAt)
-                if let match = substantialSegments.first(where: { offset >= $0.start && offset <= $0.end }) {
-                    event.speaker = .other(match.label)
-                }
-                return event
+            var filteringDecisions: [DiarizationFilteringDecision] = []
+            var substantialIDs: Set<Int> = []
+            for (id, duration) in totalDurationByID.sorted(by: { $0.key < $1.key }) {
+                let proportion = totalSubstantialDuration > 0 ? duration / totalSubstantialDuration : 0
+                let passed = duration >= minimumSpeakerDuration && proportion >= minimumSpeakerProportion
+                if passed { substantialIDs.insert(id) }
+                filteringDecisions.append(
+                    DiarizationFilteringDecision(
+                        speakerDescription: "speaker \(id)",
+                        totalDuration: duration,
+                        proportionOfSubstantialTotal: proportion,
+                        passed: passed
+                    )
+                )
+            }
+            session.diarizationFilteringDecisions = filteringDecisions
+
+            guard substantialIDs.count >= 2 else { return session }
+
+            let sortedIDs = substantialIDs.sorted()
+            let displayLabel: [Int: String] = Dictionary(
+                uniqueKeysWithValues: sortedIDs.enumerated().map { index, id in (id, "Speaker \(index + 1)") }
+            )
+
+            session.transcript = session.transcript.flatMap {
+                Self.splitAndRelabel(
+                    $0,
+                    singleSpeakerSegments: singleSpeakerSegments,
+                    multiSpeakerSegments: multiSpeakerSegments,
+                    displayLabel: displayLabel,
+                    sessionStart: session.startedAt
+                )
             }
         } catch {
             print("Speaker diarization failed: \(error.localizedDescription)")
@@ -134,37 +159,118 @@ enum SpeakerDiarizationEngine {
         return session
     }
 
-    private struct ParsedSegment {
-        let start: Double
-        let end: Double
-        let label: String
+    /// Splits one transcript event at every speaker change found within its
+    /// own words, using each word's audio-file-relative offset -- rather
+    /// than assigning the whole event from a single stored timestamp, which
+    /// can only ever be right for the one speaker whose segment happens to
+    /// contain that one timestamp. Events with no word-level timing at all
+    /// (legacy reflections saved before `WordTiming.audioStart` existed, or
+    /// non-transcript entries like the "no speech captured" marker) fall
+    /// back to the old whole-event matching rather than being silently
+    /// skipped or mismatched against invalid timing.
+    // `internal` (not `private`), deliberately, so ObservatoryTests can
+    // exercise this core matching logic directly with synthetic segments --
+    // a real SpeakerKit result needs on-device ML inference against real
+    // audio, which a unit test can't produce.
+    static func splitAndRelabel(
+        _ event: TranscriptEvent,
+        singleSpeakerSegments: [(id: Int, start: TimeInterval, end: TimeInterval)],
+        multiSpeakerSegments: [(start: TimeInterval, end: TimeInterval)],
+        displayLabel: [Int: String],
+        sessionStart: Date
+    ) -> [TranscriptEvent] {
+        guard event.source == .transcript else { return [event] }
+
+        guard !event.words.isEmpty else {
+            var event = event
+            let offset = event.timestamp.timeIntervalSince(sessionStart)
+            if let matchID = singleSpeakerSegments.first(where: { offset >= $0.start && offset <= $0.end })?.id,
+               let label = displayLabel[matchID] {
+                event.speaker = .other(label)
+            } else {
+                event.speaker = .unknown
+            }
+            return [event]
+        }
+
+        var runs: [(speaker: Speaker, words: [WordTiming])] = []
+        for word in event.words {
+            let speaker = Self.speaker(
+                for: word,
+                singleSpeakerSegments: singleSpeakerSegments,
+                multiSpeakerSegments: multiSpeakerSegments,
+                displayLabel: displayLabel
+            )
+            if let lastIndex = runs.indices.last, runs[lastIndex].speaker == speaker {
+                runs[lastIndex].words.append(word)
+            } else {
+                runs.append((speaker, [word]))
+            }
+        }
+
+        return runs.map { run in
+            TranscriptEvent(
+                timestamp: run.words.first?.start ?? event.timestamp,
+                speaker: run.speaker,
+                text: run.words.map(\.text).joined(separator: " "),
+                source: event.source,
+                words: run.words
+            )
+        }
     }
 
-    /// SpeakerKit.generateRTTM produces the standard, industry-wide RTTM
-    /// text format (`SPEAKER <file> <channel> <start> <duration> <NA> <NA>
-    /// <speaker-id> <NA> <NA>`) -- parsed here directly rather than reading
-    /// DiarizationResult's own Swift properties, since RTTM's field layout
-    /// is a stable, documented format independent of this package's exact
-    /// internal API (which this codebase can't fully verify without a
-    /// compiler available).
-    private static func parseSegments(from result: DiarizationResult, fileName: String) -> [ParsedSegment] {
-        let rttmLines = SpeakerKit.generateRTTM(from: result, fileName: fileName)
+    /// `.overlap` only when the raw diarization result itself reported
+    /// simultaneous speech (`SpeakerInfo.multiple`) for most of this word's
+    /// duration -- distinct from a word that merely straddles the boundary
+    /// between two adjacent single-speaker segments, which is attributed by
+    /// majority overlap instead. `.unknown` when the word's audio offset
+    /// isn't available at all, or no segment overlaps it.
+    static func speaker(
+        for word: WordTiming,
+        singleSpeakerSegments: [(id: Int, start: TimeInterval, end: TimeInterval)],
+        multiSpeakerSegments: [(start: TimeInterval, end: TimeInterval)],
+        displayLabel: [Int: String]
+    ) -> Speaker {
+        guard let wordStart = word.audioStart, let wordEnd = word.audioEnd, wordEnd > wordStart else {
+            return .unknown
+        }
 
-        return rttmLines.compactMap { line -> ParsedSegment? in
-            let fields = line.description.split(separator: " ").map(String.init)
-            guard fields.count >= 8, fields[0] == "SPEAKER",
-                  let start = Double(fields[3]), let duration = Double(fields[4]) else {
-                return nil
+        func overlapDuration(_ segmentStart: TimeInterval, _ segmentEnd: TimeInterval) -> TimeInterval {
+            max(0, min(wordEnd, segmentEnd) - max(wordStart, segmentStart))
+        }
+
+        let wordDuration = wordEnd - wordStart
+        let multiOverlap = multiSpeakerSegments.reduce(0) { $0 + overlapDuration($1.start, $1.end) }
+        if multiOverlap > wordDuration / 2 {
+            return .overlap
+        }
+
+        var bestID: Int?
+        var bestOverlap: TimeInterval = 0
+        for segment in singleSpeakerSegments {
+            let overlap = overlapDuration(segment.start, segment.end)
+            if overlap > bestOverlap {
+                bestOverlap = overlap
+                bestID = segment.id
             }
+        }
 
-            let token = fields[7]
-            let normalized = token
-                .replacingOccurrences(of: "speaker_", with: "", options: .caseInsensitive)
-                .replacingOccurrences(of: "speaker", with: "", options: .caseInsensitive)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "_ "))
-            let label = normalized.isEmpty ? "Speaker (\(token))" : "Speaker \(normalized)"
+        guard bestOverlap > 0, let bestID, let label = displayLabel[bestID] else {
+            return .unknown
+        }
+        return .other(label)
+    }
 
-            return ParsedSegment(start: start, end: start + duration, label: label)
+    private static func describe(_ info: SpeakerInfo) -> String {
+        switch info {
+        case .speakerId(let id):
+            return "speaker \(id)"
+        case .multiple(let ids):
+            return "multiple(\(ids.map(String.init).joined(separator: ",")))"
+        case .noMatch:
+            return "noMatch"
+        @unknown default:
+            return "unknown"
         }
     }
 

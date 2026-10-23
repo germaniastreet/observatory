@@ -37,7 +37,7 @@ struct AudioCaptureScreen: View {
                                     if store.isRecording {
                                         CaptureButton(icon: "stop.fill", label: "Stop", color: Color.red.opacity(0.9)) {
                                             speechManager.stop()
-                                            stopAndFetchBiometrics()
+                                            stopAndFetchBiometrics(finishAudioCapture: { await speechManager.finishAudioCapture() })
                                         }
 
                                         CaptureButton(icon: "arrow.counterclockwise", label: "Reset", color: ObservatoryTheme.background) {
@@ -155,12 +155,12 @@ struct AudioCaptureScreen: View {
     /// See ObservatoryScreen.stopAndFetchBiometrics's doc comment -- same
     /// pattern, duplicated here rather than shared because these two screens
     /// don't otherwise share a common base type to hang it on.
-    private func stopAndFetchBiometrics() {
+    private func stopAndFetchBiometrics(finishAudioCapture: @escaping () async -> (isReliable: Bool, missingAudioIntervals: [AudioInterval])?) {
         let sessionID = store.activeSession?.id
         let reflectionStart = store.activeSession?.startedAt
         let reflectionEnd = store.activeSession?.endedAt ?? Date()
 
-        store.stopAndObserve()
+        store.stopAndObserve(finishAudioCapture: finishAudioCapture)
 
         guard let sessionID, let reflectionStart else { return }
 

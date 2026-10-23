@@ -12,29 +12,16 @@ final class SpeechRecognitionManager: ObservableObject {
 
     /// One chunk of recognized speech.
     ///
-    /// `start`/`end` used to be derived from SFSpeechRecognizer's own
-    /// `SFTranscriptionSegment.timestamp`/`.duration`. That turned out to be
-    /// a mistake this codebase already learned from once: those segment
-    /// timestamps don't reliably track real elapsed time -- deliberate 10s+
-    /// pauses were confirmed (empirically, via the "Pause gaps: None
-    /// detected" bug) not to reliably show up as timestamp gaps at all,
-    /// which is exactly why SilenceTracker exists as an independent,
-    /// acoustic (RMS-based, real `Date()`) pause detector instead of trusting
-    /// this recognizer-internal clock.
-    ///
-    /// That fix didn't go far enough, though: once acoustic pauses needed to
-    /// be placed *inline*, between the specific two words they fell between,
-    /// this struct's `start`/`end` were still on the old recognizer-internal
-    /// clock while `SilenceTracker`'s pause timestamps are on the real wall
-    /// clock. Comparing a real pause `Date` against a `start`/`end` boundary
-    /// computed from segment.timestamp -- a clock that doesn't advance
-    /// through real silence the way real time does -- meant the pause's
-    /// `Date` almost never actually fell inside any word's window, so inline
-    /// markers silently stopped appearing.
-    ///
-    /// `start`/`end` are now stamped from the real `Date()` of the callback
-    /// that first reported each word (see `SpeechRecognitionManager.utterances`),
-    /// same clock as `SilenceTracker`, so gap placement actually lines up.
+    /// `start`/`end` are derived from each word's `SFTranscriptionSegment.timestamp`/
+    /// `.duration` (seconds since this segment's recognition request began
+    /// receiving audio), anchored to that request's *actual first
+    /// successfully-written* audio buffer -- not to callback-arrival time,
+    /// and not to `engine.start()`/request-swap time, neither of which
+    /// reliably coincides with when audio actually started flowing. See
+    /// `AudioFileWriter`. Each `WordTiming` also carries an audio-file-
+    /// relative offset (`audioStart`/`audioEnd`) in the same coordinate
+    /// system SpeakerDiarizationEngine's diarization segments use, so the
+    /// two can be matched directly instead of through a wall-clock proxy.
     struct Utterance {
         var text: String
         var start: Date
@@ -42,117 +29,125 @@ final class SpeechRecognitionManager: ObservableObject {
 
         /// Per-word timing that made up this utterance, in order. Preserved
         /// (rather than discarded once merged into `text`) so the transcript
-        /// view can place a pause marker between the exact two words it fell
-        /// between -- see TranscriptEvent.words' doc comment.
+        /// view can place a pause marker between the exact two words it
+        /// actually fell between, and so diarization can match at word
+        /// granularity instead of one timestamp per whole utterance.
         var words: [WordTiming] = []
     }
 
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private let audioEngine = AVAudioEngine()
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var isStoppingIntentionally = false
 
-    /// This reflection's raw audio, written alongside the live speech-to-text
-    /// so a later step (speaker diarization) has real audio to work from --
-    /// SFSpeechRecognizer only ever gives us text back, never the audio.
-    private var audioFile: AVAudioFile?
     private var pendingAudioFileURL: URL?
+    private var audioWriter: AudioFileWriter?
 
-    /// Thread-safe target for the audio tap's buffer callback, which fires on
-    /// a real-time audio thread outside this class's `@MainActor` isolation.
-    /// The tap itself is installed exactly once (in the first call to
-    /// `beginListeningSegment()`) and is never torn down at a routine segment
-    /// boundary -- only this box's contents change, atomically under a lock,
-    /// when a new segment's request replaces the previous one. That's what
-    /// keeps the mic capturing continuously across Apple's ~1 minute segment
-    /// limit instead of stopping and restarting the engine, which previously
-    /// left a real gap (stop → remove tap → reconfigure session → reinstall
-    /// tap → start) during which speech at the seam was silently dropped --
-    /// the leading suspect for transcript quality degrading right around the
-    /// one-minute mark.
+    /// Monotonically increasing for the lifetime of this manager instance --
+    /// never reset in `start()`. A stale callback from an already-superseded
+    /// segment (routine rollover, interruption, or an entirely different,
+    /// already-stopped reflection) always carries a generation strictly less
+    /// than `requestGeneration` by the time it's checked, so monotonicity
+    /// alone is what prevents an old reflection's late callback from ever
+    /// mutating a new one.
+    private var requestGeneration = 0
+
+    private enum SegmentState {
+        case active
+        case sealed
+    }
+    private var currentGenerationState: SegmentState = .sealed
+
+    /// Thread-safe mirror of `requestGeneration`, readable from the
+    /// realtime audio-tap thread (which can't touch this @MainActor class's
+    /// stored properties directly). Updated every time `beginListeningSegment()`
+    /// advances the generation, including routine rollovers past the
+    /// persistent tap/engine.
+    private final class GenerationBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func set(_ newValue: Int) {
+            lock.lock(); value = newValue; lock.unlock()
+        }
+        func get() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return value
+        }
+    }
+    private let generationBox = GenerationBox()
+
+    /// Thread-safe target for the audio tap's buffer callback, which fires
+    /// on a real-time audio thread outside this class's `@MainActor`
+    /// isolation. The tap itself is installed exactly once (in the first
+    /// call to `beginListeningSegment()`) and is never torn down at a
+    /// routine segment boundary -- only the request underneath changes.
+    /// That's what keeps the mic capturing continuously across Apple's ~1
+    /// minute segment limit instead of stopping and restarting the engine,
+    /// which previously left a real gap during which speech at the seam was
+    /// silently dropped.
     private final class CurrentRequestBox: @unchecked Sendable {
         private let lock = NSLock()
         private var request: SFSpeechAudioBufferRecognitionRequest?
-        private var audioFile: AVAudioFile?
 
-        /// Swaps in the new request/file and returns whatever was previously
-        /// set, still under the same lock the tap callback uses -- so by the
-        /// time this returns, no in-flight tap callback can still be holding
-        /// a reference to the old request. That guarantees it's safe for the
-        /// caller to call `endAudio()` on the returned previous request right
-        /// after this returns, without racing a concurrent `append(_:)` on
-        /// the audio thread (which would throw).
+        /// Swaps in the new request and returns whatever was previously
+        /// set, under the same lock `append()` uses -- so by the time this
+        /// returns, no in-flight `append()` can still be holding the old
+        /// reference, and it's safe for the caller to call `endAudio()` on
+        /// the returned previous request right after.
         @discardableResult
-        func set(request: SFSpeechAudioBufferRecognitionRequest?, audioFile: AVAudioFile?) -> SFSpeechAudioBufferRecognitionRequest? {
-            lock.lock()
-            defer { lock.unlock() }
+        func set(request: SFSpeechAudioBufferRecognitionRequest?) -> SFSpeechAudioBufferRecognitionRequest? {
+            lock.lock(); defer { lock.unlock() }
             let previous = self.request
             self.request = request
-            self.audioFile = audioFile
             return previous
         }
 
         /// Called from the audio tap on a real-time thread for every buffer.
-        /// Appending and the raw-audio file write both happen under the same
-        /// lock `set(request:audioFile:)` uses, so a segment swap can never
-        /// interleave with an in-progress append.
         func append(_ buffer: AVAudioPCMBuffer) {
-            lock.lock()
-            defer { lock.unlock() }
+            lock.lock(); defer { lock.unlock() }
             request?.append(buffer)
-            if let audioFile {
-                try? audioFile.write(from: buffer)
-            }
         }
 
-        func clear() {
-            lock.lock()
-            defer { lock.unlock() }
+        /// Ends and clears the request under the *same* lock `append()`
+        /// uses. Previously, stop/interruption called `endAudio()` via a
+        /// separate, unlocked `recognitionRequest` property while the
+        /// realtime tap thread could concurrently call `append()` via this
+        /// box on the very same object -- a genuine data race on the
+        /// request, independent of anything generation-related. Routing
+        /// every `endAudio()` through this one method closes it.
+        func endAndClear() {
+            lock.lock(); defer { lock.unlock() }
+            request?.endAudio()
             request = nil
-            audioFile = nil
         }
     }
+
+    private let currentRequestBox = CurrentRequestBox()
 
     /// Detects real silence gaps by measuring RMS amplitude on every audio
     /// buffer from the tap, independent of speech recognition. Called from
     /// the same real-time audio thread as `CurrentRequestBox.append`, so it
     /// has its own lock rather than sharing that one -- there's no ordering
     /// requirement between the two, and keeping them separate avoids
-    /// widening `CurrentRequestBox`'s lock scope (and its append-after-
-    /// endAudio safety guarantee) to cover unrelated work.
+    /// widening `CurrentRequestBox`'s lock scope to cover unrelated work.
     private final class SilenceTracker: @unchecked Sendable {
         private let lock = NSLock()
         private var isSilent = false
         private var silenceStart: Date?
         private var onGap: (@Sendable (Date, TimeInterval) -> Void)?
-
-        /// Wall-clock instant a louder-than-threshold buffer first showed up
-        /// during an ongoing silence, or nil if the most recent buffer was
-        /// itself quiet. Used to require *sustained* louder audio (see
-        /// `resumeDebounce`) before treating a silence as over.
         private var nonSilentStreakStart: Date?
 
         /// RMS amplitude (0...1 scale, Float32 PCM) below this is treated as
         /// silence. This is a heuristic, not a calibrated measurement --
         /// tuned for a phone at normal talking distance in a quiet-to-
-        /// moderate room. Erring toward "misses a real but very quiet pause"
-        /// is preferable to erring toward "flags normal quiet speech as
-        /// silence."
+        /// moderate room.
         private let silenceRMSThreshold: Float = 0.02
 
         /// A single buffer is ~20-25ms at typical sample rates -- far
-        /// shorter than a real word. Without this, one buffer of incidental
-        /// noise during a real multi-second pause (a breath, the phone
-        /// shifting, a background click) ends the silence measurement right
-        /// there, fragmenting one real pause into several shorter ones and
-        /// silently losing whatever didn't individually clear
-        /// `minimumGapDuration`. In testing this was the actual cause of a
-        /// deliberate ~10s pause showing up as two separate 1.6s pauses
-        /// instead of one accurate ~10s one. Requiring louder audio to be
-        /// sustained this long before ending a silence makes a brief blip
-        /// not count, while real resumed speech (which lasts far longer than
-        /// this) still ends the silence promptly.
+        /// shorter than a real word. Requiring louder audio to be sustained
+        /// this long before ending a silence makes a brief blip (a breath,
+        /// a click) not count, while real resumed speech still ends the
+        /// silence promptly.
         private let resumeDebounce: TimeInterval = 0.3
 
         /// Matches ReflectionSessionStore.minimumObservablePause -- gaps
@@ -160,14 +155,12 @@ final class SpeechRecognitionManager: ObservableObject {
         private let minimumGapDuration: TimeInterval = 1.5
 
         func setCallback(_ callback: @escaping @Sendable (Date, TimeInterval) -> Void) {
-            lock.lock()
-            defer { lock.unlock() }
+            lock.lock(); defer { lock.unlock() }
             onGap = callback
         }
 
         func reset() {
-            lock.lock()
-            defer { lock.unlock() }
+            lock.lock(); defer { lock.unlock() }
             isSilent = false
             silenceStart = nil
             nonSilentStreakStart = nil
@@ -191,31 +184,18 @@ final class SpeechRecognitionManager: ObservableObject {
             var firedArgs: (Date, TimeInterval)?
 
             if rms < silenceRMSThreshold {
-                // Quiet buffer -- cancel any not-yet-confirmed "speech
-                // resumed" streak (it was just a blip) and, if this is the
-                // start of a new silence, mark it.
                 nonSilentStreakStart = nil
                 if !isSilent {
                     isSilent = true
                     silenceStart = date
                 }
             } else if isSilent {
-                // A louder buffer during an ongoing silence. Don't end the
-                // silence yet -- only once louder audio has been sustained
-                // for `resumeDebounce` is this treated as speech actually
-                // resuming, so a single brief noise blip can't fragment a
-                // real pause.
                 if nonSilentStreakStart == nil {
                     nonSilentStreakStart = date
                 }
 
                 if let streakStart = nonSilentStreakStart,
                    date.timeIntervalSince(streakStart) >= resumeDebounce {
-                    // Confirmed: speech actually resumed. The silence
-                    // genuinely ended when the louder audio first started
-                    // (`streakStart`), not now -- `date` also includes the
-                    // debounce window itself, which is real audio, not
-                    // silence.
                     if let silenceStart {
                         let duration = streakStart.timeIntervalSince(silenceStart)
                         if duration >= minimumGapDuration {
@@ -236,25 +216,181 @@ final class SpeechRecognitionManager: ObservableObject {
         }
     }
 
-    private let currentRequestBox = CurrentRequestBox()
-
-    /// Tracks real acoustic silence directly from the raw microphone
-    /// buffers, entirely independent of SFSpeechRecognizer's own segment
-    /// timestamps.
-    ///
-    /// Why this exists: pause detection originally relied on gaps between
-    /// SFTranscriptionSegment timestamps (see the old `Utterance`-gap
-    /// approach still used below for utterance *splitting*). In testing,
-    /// deliberate multi-second silences produced no usable timestamp gap --
-    /// "Pause gaps: None detected" on a reflection that had several 10s
-    /// pauses. The likely explanation is that the on-device recognizer's
-    /// segment timestamps track recognized-speech time, not raw wall-clock
-    /// buffer time, so silence between words doesn't reliably show up as a
-    /// timestamp jump the way true acoustic silence would. Measuring RMS
-    /// directly on the same buffers already flowing through the audio tap
-    /// sidesteps that entirely -- it doesn't depend on anything
-    /// SFSpeechRecognizer decides to report.
     private let silenceTracker = SilenceTracker()
+
+    /// Owns the saved `.caf` file and is the single source of truth for
+    /// where a moment in time sits within it. Writes happen on a dedicated
+    /// background queue, never on the realtime audio-tap thread -- a
+    /// synchronous disk write there risked audio glitches, and errors were
+    /// previously swallowed with `try?`. `writtenFrames` only ever advances
+    /// on a confirmed successful write, never on admission to the queue --
+    /// recognition (which appends independently, synchronously, via
+    /// `CurrentRequestBox`) and the saved file could otherwise silently
+    /// disagree about how much audio actually exists.
+    /// `AVAudioPCMBuffer` isn't `Sendable`. Wraps a buffer that's been
+    /// verified safe to hand across a queue boundary (a private, freshly-
+    /// allocated copy nothing else holds a reference to) so it can be
+    /// captured by a `@Sendable` closure such as `DispatchQueue.async`'s.
+    private struct SendableBufferBox: @unchecked Sendable {
+        let buffer: AVAudioPCMBuffer
+    }
+
+    private final class AudioFileWriter: @unchecked Sendable {
+        private let lock = NSLock()
+        private let queue = DispatchQueue(label: "Observatory.AudioFileWriter", qos: .utility)
+        private let audioFile: AVAudioFile
+
+        /// Bounds how much work can be outstanding on `queue` at once.
+        /// Without this, a sustained stall in `AVAudioFile.write` could grow
+        /// unboundedly on top of the (already buffer-copy-owned) memory.
+        private static let maxOutstanding = 200
+        private var outstanding = 0
+
+        private var writtenFrames: Int64 = 0
+
+        /// One entry per detected sample-rate change -- the overwhelming
+        /// majority of recordings have exactly one. `baseFrames`/`baseSeconds`
+        /// are the cumulative totals *before* this epoch began, so
+        /// converting a frame count to seconds is piecewise, never a single
+        /// cumulative-frames-divided-by-current-rate division, which would
+        /// be wrong for any frame written under an earlier rate.
+        private struct Epoch {
+            var baseFrames: Int64
+            var baseSeconds: TimeInterval
+            var sampleRate: Double
+        }
+        private var epochs: [Epoch]
+
+        private struct GenerationAnchor {
+            var frameOffset: Int64
+            var wallClockAnchor: Date
+        }
+        private var generationAnchors: [Int: GenerationAnchor] = [:]
+
+        private(set) var missingAudioIntervals: [AudioInterval] = []
+        private(set) var isReliable = true
+
+        init(url: URL, format: AVAudioFormat) throws {
+            audioFile = try AVAudioFile(forWriting: url, settings: format.settings)
+            epochs = [Epoch(baseFrames: 0, baseSeconds: 0, sampleRate: format.sampleRate)]
+        }
+
+        /// Called from the realtime audio-tap thread. Deep-copies `buffer`
+        /// (engine-owned buffers aren't safe to retain past the callback)
+        /// and hands the copy to the background queue together with the
+        /// real capture-time metadata -- `capturedAt` is read on the tap
+        /// thread at the actual moment this buffer arrived, never inferred
+        /// later from queue admission or drain time.
+        func enqueue(_ buffer: AVAudioPCMBuffer, generation: Int, capturedAt: Date) {
+            lock.lock()
+            guard outstanding < Self.maxOutstanding else {
+                lock.unlock()
+                recordLoss(frameCount: Int64(buffer.frameLength))
+                return
+            }
+            outstanding += 1
+            lock.unlock()
+
+            guard let copy = Self.copyBuffer(buffer) else {
+                lock.lock(); outstanding -= 1; lock.unlock()
+                recordLoss(frameCount: Int64(buffer.frameLength))
+                return
+            }
+
+            let sampleRate = buffer.format.sampleRate
+            // `AVAudioPCMBuffer` isn't `Sendable`, but `copy` is a private,
+            // just-allocated deep copy that nothing else touches before
+            // this closure consumes it -- safe to cross the queue boundary,
+            // same manually-verified-safety rationale as this class's own
+            // `@unchecked Sendable` conformance.
+            let boxedCopy = SendableBufferBox(buffer: copy)
+            queue.async { [weak self] in
+                self?.write(boxedCopy.buffer, generation: generation, capturedAt: capturedAt, sampleRate: sampleRate)
+            }
+        }
+
+        private func write(_ buffer: AVAudioPCMBuffer, generation: Int, capturedAt: Date, sampleRate: Double) {
+            lock.lock()
+            if generationAnchors[generation] == nil {
+                if let lastEpoch = epochs.last, lastEpoch.sampleRate != sampleRate {
+                    epochs.append(Epoch(baseFrames: writtenFrames, baseSeconds: audioSecondsLocked(for: writtenFrames), sampleRate: sampleRate))
+                }
+                generationAnchors[generation] = GenerationAnchor(frameOffset: writtenFrames, wallClockAnchor: capturedAt)
+            }
+            lock.unlock()
+
+            do {
+                try audioFile.write(from: buffer)
+                lock.lock()
+                writtenFrames += Int64(buffer.frameLength)
+                outstanding -= 1
+                lock.unlock()
+            } catch {
+                lock.lock(); outstanding -= 1; lock.unlock()
+                recordLoss(frameCount: Int64(buffer.frameLength))
+            }
+        }
+
+        private func recordLoss(frameCount: Int64) {
+            lock.lock()
+            let start = audioSecondsLocked(for: writtenFrames)
+            let end = audioSecondsLocked(for: writtenFrames + frameCount)
+            missingAudioIntervals.append(AudioInterval(start: start, end: end))
+            isReliable = false
+            lock.unlock()
+        }
+
+        private func audioSecondsLocked(for frames: Int64) -> TimeInterval {
+            let epoch = epochs.last(where: { $0.baseFrames <= frames }) ?? epochs[0]
+            return epoch.baseSeconds + Double(frames - epoch.baseFrames) / epoch.sampleRate
+        }
+
+        /// Audio-file-relative offset for a word reported at
+        /// `segmentTimestamp` (seconds since `generation`'s recognition
+        /// request began receiving audio). `nil` if this generation never
+        /// got a single successfully-written buffer -- e.g. every buffer
+        /// for it was lost -- rather than guessing an offset of 0.
+        func audioOffset(forGeneration generation: Int, segmentTimestamp: TimeInterval) -> TimeInterval? {
+            lock.lock(); defer { lock.unlock() }
+            guard let anchor = generationAnchors[generation] else { return nil }
+            return audioSecondsLocked(for: anchor.frameOffset) + segmentTimestamp
+        }
+
+        /// Wall-clock equivalent of the above, anchored to this
+        /// generation's first *actually captured* buffer.
+        func wallClock(forGeneration generation: Int, segmentTimestamp: TimeInterval) -> Date? {
+            lock.lock(); defer { lock.unlock() }
+            guard let anchor = generationAnchors[generation] else { return nil }
+            return anchor.wallClockAnchor.addingTimeInterval(segmentTimestamp)
+        }
+
+        /// Waits for every write already accepted onto `queue` to finish.
+        /// Diarization and any future acoustic-feature extraction must
+        /// never open this file before this returns.
+        func flush() async {
+            await withCheckedContinuation { continuation in
+                queue.async {
+                    continuation.resume()
+                }
+            }
+        }
+
+        func diagnosticsSnapshot() -> (isReliable: Bool, missingAudioIntervals: [AudioInterval]) {
+            lock.lock(); defer { lock.unlock() }
+            return (isReliable, missingAudioIntervals)
+        }
+
+        private static func copyBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+            guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameCapacity) else { return nil }
+            copy.frameLength = buffer.frameLength
+            guard let src = buffer.floatChannelData, let dst = copy.floatChannelData else { return copy }
+            let channelCount = Int(buffer.format.channelCount)
+            for channel in 0..<channelCount {
+                dst[channel].update(from: src[channel], count: Int(buffer.frameLength))
+            }
+            return copy
+        }
+    }
 
     private var currentOnSilenceGap: (@MainActor (Date, TimeInterval) -> Void)?
 
@@ -266,48 +402,32 @@ final class SpeechRecognitionManager: ObservableObject {
     /// the reflection, we seal whatever utterances that segment produced in
     /// here and quietly start a new segment, so the transcript reads as one
     /// continuous recording to the user.
-    ///
-    /// Known limitation: while a segment is paused for an interruption, the
-    /// raw .caf audio file also isn't being written to (the mic tap is torn
-    /// down), so the file itself has no gap for that pause -- but these
-    /// utterance timestamps are wall-clock and DO include it. For a
-    /// recording with no interruptions (the common case) this doesn't
-    /// matter; for one that was interrupted, diarization's audio-relative
-    /// segment offsets and these wall-clock utterance offsets can drift
-    /// apart by roughly the interruption's length. Not fixed here -- it's a
-    /// separate, second-order issue from the one this rewrite addresses.
     private var sealedUtterances: [Utterance] = []
 
     /// Utterances recognized so far in the *current* segment, recomputed in
     /// full from `SFSpeechRecognitionResult.bestTranscription.segments`
     /// every time a new result arrives (that array only ever grows within a
-    /// segment, so this is cheap and always consistent).
+    /// segment, and each segment's own `timestamp`/`duration` never changes
+    /// once reported, so recomputing from scratch every call is cheap and
+    /// always consistent -- no separate "already stamped" cache needed).
     private var currentSegmentUtterances: [Utterance] = []
 
-    /// Non-nil once the current segment's audio has actually started (right
-    /// after `audioEngine.start()` succeeds, or immediately after a
-    /// mid-stream segment swap that doesn't restart the engine). Used only
-    /// as a "has recognition actually begun" gate in `handleRecognition` --
-    /// word/utterance timestamps no longer derive from this (see
-    /// `Utterance`'s doc comment for why).
+    /// Non-nil once the current segment's audio has actually started. Used
+    /// only as a "has recognition actually begun" gate in `handleRecognition`,
+    /// and as a last-resort wall-clock fallback if `AudioFileWriter` never
+    /// got a successfully-written buffer for this generation.
     private var segmentAudioStartDate: Date?
-
-    /// Real wall-clock time each already-recognized word was first reported
-    /// by SFSpeechRecognizer, indexed by its position among all non-empty
-    /// words seen so far in the current segment. `utterances(from:...)`
-    /// consults this on every call (which re-delivers the *entire*
-    /// transcript-so-far, not just what's new) so an already-stamped word
-    /// keeps its original real timestamp instead of being re-stamped with a
-    /// later "now" on every subsequent partial-result callback.
-    private var lastRealWords: [WordTiming] = []
-
-    /// Treat a gap this long or longer between two recognized utterances as
-    /// a separate utterance rather than a continuation of the same one.
-    private static let utteranceGapThreshold: TimeInterval = 0.7
 
     private var currentOnTranscript: (@MainActor ([Utterance]) -> Void)?
     private var wasRecordingBeforeInterruption = false
     private var interruptionObserver: NSObjectProtocol?
+
+    /// Timestamps of recent auto-restarts triggered by a recognition error
+    /// while still recording (not a routine ~1-minute rollover, not a
+    /// stop, not an interruption). If these start happening faster than a
+    /// person could possibly be causing on purpose, something is
+    /// persistently failing -- better to stop and say so than spin forever.
+    private var recentAutoRestarts: [Date] = []
 
     init() {
         interruptionObserver = NotificationCenter.default.addObserver(
@@ -315,9 +435,6 @@ final class SpeechRecognitionManager: ObservableObject {
             object: AVAudioSession.sharedInstance(),
             queue: .main
         ) { [weak self] notification in
-            // Pulled out here, before crossing into the Task below, since
-            // Notification itself isn't Sendable -- only these two plain
-            // values (an enum and a UInt) need to cross that boundary.
             guard let info = notification.userInfo,
                   let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
@@ -381,15 +498,10 @@ final class SpeechRecognitionManager: ObservableObject {
         // This app wants exactly one speaker -- the person reflecting --
         // and nothing else. Single-speaker isolation is left entirely to
         // system Mic Mode (Control Center) rather than also applying the
-        // audio engine's own voice-processing unit in `beginListeningSegment`
-        // -- doing both stacked double-processing the signal and measurably
-        // hurt SFSpeechRecognizer's accuracy. Mic Mode is user-owned and
-        // read-only to apps (`preferredMicrophoneMode` has no setter), so
-        // this can only ask once, not force it: the first time a reflection
-        // starts without "Voice Isolation" already selected, surface the
-        // system's own Mic Mode picker so switching to it is one tap. After
-        // that it defers to whatever the person chose, rather than
-        // re-prompting on every single recording.
+        // audio engine's own voice-processing unit -- doing both stacked
+        // double-processed the signal and measurably hurt
+        // SFSpeechRecognizer's accuracy. Mic Mode is user-owned and
+        // read-only to apps, so this can only ask once, not force it.
         if AVCaptureDevice.preferredMicrophoneMode != .voiceIsolation,
            !UserDefaults.standard.bool(forKey: Self.hasPromptedMicModeKey) {
             UserDefaults.standard.set(true, forKey: Self.hasPromptedMicModeKey)
@@ -404,8 +516,9 @@ final class SpeechRecognitionManager: ObservableObject {
         liveTranscript = ""
         isStoppingIntentionally = false
         wasRecordingBeforeInterruption = false
-        audioFile = nil
+        audioWriter = nil
         pendingAudioFileURL = Self.audioFileURL(named: audioFileName)
+        recentAutoRestarts = []
         silenceTracker.reset()
 
         beginListeningSegment()
@@ -426,108 +539,96 @@ final class SpeechRecognitionManager: ObservableObject {
     /// continuing past Apple's ~1 minute segment limit.
     ///
     /// Whenever the audio engine is already running -- the routine case of
-    /// continuing past the ~1 minute limit -- this does NOT stop it or touch
-    /// its tap. It only swaps in a fresh `SFSpeechAudioBufferRecognitionRequest`
-    /// (via `currentRequestBox`) and starts a new recognition task against
-    /// it, so the mic never stops capturing and no audio at the segment seam
-    /// is lost. The engine and tap are only started fresh here when they
-    /// aren't already running -- the very first segment, or resuming after an
-    /// interruption tore them down.
+    /// continuing past the ~1 minute limit -- this does NOT stop it, touch
+    /// its tap, or reconfigure the audio session. It only swaps in a fresh
+    /// `SFSpeechAudioBufferRecognitionRequest` so the mic never stops
+    /// capturing and no audio at the segment seam is lost, and advances the
+    /// generation so word timing anchors to the right request.
     private func beginListeningSegment() {
         guard let speechRecognizer, speechRecognizer.isAvailable else {
             statusMessage = "Speech recognizer unavailable."
             return
         }
 
+        // SECURITY.md promises reflection content never leaves the device.
+        // `request.requiresOnDeviceRecognition` below is what actually
+        // enforces that -- without it, SFSpeechRecognizer may silently use
+        // Apple's server-based recognition instead. If the device/locale
+        // combination can't do on-device recognition at all, stop and say
+        // so rather than silently falling back to a network request that
+        // would make the privacy claim false.
+        guard speechRecognizer.supportsOnDeviceRecognition else {
+            statusMessage = "On-device speech recognition isn't available on this device -- stopping rather than send audio off-device."
+            stop()
+            return
+        }
+
         currentSegmentUtterances = []
         segmentAudioStartDate = nil
 
-        // A new recognition request starts SFSpeechRecognizer's own segment
-        // array back at empty, so word-index-based lookups into the
-        // previous segment's real timestamps would line up with the wrong
-        // words if this weren't cleared too.
-        lastRealWords = []
+        requestGeneration += 1
+        let generation = requestGeneration
+        generationBox.set(generation)
+        currentGenerationState = .active
 
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            // `.measurement`, not `.default`: this disables the system's
-            // automatic gain adjustment on the incoming signal, which is
-            // exactly what Apple's own SFSpeechRecognizer + AVAudioEngine
-            // sample code uses, and not incidentally -- recognition accuracy
-            // was confirmed in testing to suffer under `.default` and its
-            // extra signal processing, on top of whatever the system Mic
-            // Mode already applies. The tradeoff is the mic will again sound
-            // quieter at the signal level than `.default` (no AGC boost),
-            // which was the original complaint this app started from -- but
-            // actually understanding what was said matters more than how
-            // loud it registers.
-            try audioSession.setCategory(.record, mode: .measurement, options: [.duckOthers])
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+            let isColdStart = !audioEngine.isRunning
+
+            // Only reconfigure the session on a true cold start (first
+            // segment, or resuming after an interruption tore the engine
+            // down) -- reconfiguring an already-active, already-correct
+            // session on every routine ~1-minute rollover was redundant
+            // work and the leading cause of the repeated main-thread
+            // AVAudioSession responsiveness warning seen in the console.
+            if isColdStart {
+                // `.measurement`, not `.default`: matches Apple's own
+                // SFSpeechRecognizer sample code. `.default`'s automatic
+                // gain adjustment measurably hurt recognition accuracy on
+                // top of whatever the system Mic Mode already applies.
+                try audioSession.setCategory(.record, mode: .measurement, options: [.duckOthers])
+                try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+            }
 
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
             // Without this, SFSpeechRecognizer returns one unbroken run-on
-            // phrase with no periods/commas at all -- the recognizer still
-            // "hears" the pauses (confirmed separately by SilenceTracker on
-            // the same buffers), it just doesn't mark them in the text
-            // unless asked to.
+            // phrase with no periods/commas at all.
             request.addsPunctuation = true
+            // Enforces the on-device-only privacy claim in SECURITY.md --
+            // already confirmed available via supportsOnDeviceRecognition
+            // above, but the request itself has to opt in or recognition
+            // can still use Apple's server-based path.
+            request.requiresOnDeviceRecognition = true
 
             let inputNode = audioEngine.inputNode
-
-            // Deliberately NOT using `inputNode.setVoiceProcessingEnabled`
-            // here. That audio unit's real-time ML noise suppression/echo
-            // cancellation/gating is tuned for human perceptual clarity on a
-            // phone call, not for feeding a speech recognizer -- it was
-            // confirmed in testing to make SFSpeechRecognizer miss words and
-            // mistranscribe what it did catch, stacked on top of whatever
-            // the system's own Mic Mode (Control Center) already applies
-            // upstream. Apple's own SFSpeechRecognizer sample code avoids
-            // voice processing for the same reason. Single-speaker isolation
-            // is left entirely to the system Mic Mode (see `start()` below),
-            // which the person can set to Voice Isolation themselves without
-            // this app double-processing the signal on top of it.
-
             let recordingFormat = inputNode.outputFormat(forBus: 0)
 
-            if audioFile == nil, let pendingAudioFileURL {
+            if audioWriter == nil, let pendingAudioFileURL {
                 do {
                     try FileManager.default.createDirectory(
                         at: pendingAudioFileURL.deletingLastPathComponent(),
                         withIntermediateDirectories: true
                     )
-                    audioFile = try AVAudioFile(forWriting: pendingAudioFileURL, settings: recordingFormat.settings)
+                    audioWriter = try AudioFileWriter(url: pendingAudioFileURL, format: recordingFormat)
                 } catch {
-                    // Live transcription still works without this -- diarization
-                    // just won't have audio to work from for this reflection.
+                    // Live transcription still works without this --
+                    // diarization just won't have audio to work from.
                     print("Reflection audio recording failed to open: \(error.localizedDescription)")
-                    audioFile = nil
+                    audioWriter = nil
                 }
             }
 
-            // Atomically swap this segment's request (and the unchanging
-            // audio file reference) into the box, then end the *previous*
-            // request only after the swap completes. Because `set` and
-            // `append` share one lock, this guarantees no tap callback can
-            // still be appending to the old request by the time we call
-            // `endAudio()` on it below -- avoiding the "append after
-            // endAudio" exception that a naive swap could hit.
-            let previousRequest = currentRequestBox.set(request: request, audioFile: audioFile)
-            recognitionRequest = request
+            let previousRequest = currentRequestBox.set(request: request)
+            previousRequest?.endAudio()
 
-            if audioEngine.isRunning {
-                // Routine continuation past the ~1 minute segment limit --
-                // the engine and tap stay exactly as they are; only the
-                // request/task underneath changes. No stop/start gap.
-                previousRequest?.endAudio()
-            } else {
-                // First segment, or resuming after an interruption tore the
-                // engine down -- (re)install the tap and start fresh.
-                previousRequest?.endAudio()
+            if isColdStart {
                 inputNode.removeTap(onBus: 0)
-                inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [currentRequestBox, silenceTracker] buffer, _ in
+                inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [currentRequestBox, silenceTracker, generationBox, audioWriter] buffer, _ in
+                    let capturedAt = Date()
                     currentRequestBox.append(buffer)
-                    silenceTracker.process(buffer, at: Date())
+                    silenceTracker.process(buffer, at: capturedAt)
+                    audioWriter?.enqueue(buffer, generation: generationBox.get(), capturedAt: capturedAt)
                 }
 
                 audioEngine.prepare()
@@ -535,13 +636,12 @@ final class SpeechRecognitionManager: ObservableObject {
             }
 
             segmentAudioStartDate = Date()
-
             isRecording = true
             statusMessage = "Listening."
 
             recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
                 Task { @MainActor [weak self] in
-                    self?.handleRecognition(result: result, error: error)
+                    self?.handleRecognition(result: result, error: error, generation: generation)
                 }
             }
         } catch {
@@ -551,87 +651,44 @@ final class SpeechRecognitionManager: ObservableObject {
     }
 
     /// Groups a result's word/phrase-level segments into utterances,
-    /// splitting wherever the gap since the previous word's real timestamp
-    /// is at least `utteranceGapThreshold`. `result.bestTranscription.segments`
-    /// only ever grows within one recognition request, and each already-seen
-    /// word keeps the real timestamp it was first stamped with (via
-    /// `lastRealWords`), so re-running this on every partial-result callback
-    /// reproduces the same grouping for previously-seen words and only adds
-    /// new ones -- it's not idempotent in the sense of being independent of
-    /// *when* it's called (it depends on real elapsed time between calls),
-    /// but it is stable in the sense that already-placed words and pause
-    /// windows don't get rewritten underneath the UI.
+    /// splitting wherever the audio-relative gap since the previous word is
+    /// at least `utteranceGapThreshold`.
     ///
     /// Text for each segment comes from `formattedString` (via
     /// `segment.substringRange`), not `segment.substring` -- the latter is
     /// SFSpeechRecognizer's raw per-word text with none of the
     /// capitalization, punctuation, and smart-formatting Apple normally
-    /// applies to `bestTranscription.formattedString`. Reconstructing the
-    /// transcript from raw substrings (an earlier version of this function
-    /// did this) reads as noticeably lower quality even when every word was
-    /// recognized correctly. `substringRange` is the documented way to map a
-    /// segment back onto its formatted text.
-    private func utterances(from segments: [SFTranscriptionSegment], formattedString: String, now: Date) -> [Utterance] {
-        var result: [Utterance] = []
-        var flatWords: [WordTiming] = []
-        let formatted = formattedString as NSString
-
-        for segment in segments {
-            let range = segment.substringRange
-            let rawText: String
-            if range.location != NSNotFound, range.location + range.length <= formatted.length {
-                rawText = formatted.substring(with: range)
-            } else {
-                // Fallback for the rare case a range doesn't line up with
-                // the current formattedString -- still correct, just not
-                // formatted.
-                rawText = segment.substring
-            }
-            let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { continue }
-
-            // Position among non-empty words seen so far this call -- lines
-            // up with how `lastRealWords` was built on the previous call, so
-            // a word already stamped keeps its real timestamp instead of
-            // being overwritten with a later "now" every time this whole
-            // (re-delivered) transcript is recomputed.
-            let wordIndex = flatWords.count
-            let word: WordTiming
-            if wordIndex < lastRealWords.count, lastRealWords[wordIndex].text == text {
-                word = lastRealWords[wordIndex]
-            } else {
-                // Newly reported this call -- `now` (this callback's real
-                // Date) is the only honest anchor available: SFSpeechRecognizer
-                // doesn't tell us when the word was actually *spoken*, only
-                // when it finished being *recognized*, which is close enough
-                // for placing pause markers and lines up with SilenceTracker's
-                // clock, unlike segment.timestamp (see Utterance's doc comment).
-                word = WordTiming(text: text, start: now, end: now)
-            }
-            flatWords.append(word)
-
-            if let lastIndex = result.indices.last,
-               word.start.timeIntervalSince(result[lastIndex].end) < Self.utteranceGapThreshold {
-                result[lastIndex].text += " " + text
-                result[lastIndex].end = word.end
-                result[lastIndex].words.append(word)
-            } else {
-                result.append(Utterance(text: text, start: word.start, end: word.end, words: [word]))
-            }
-        }
-
-        lastRealWords = flatWords
-        return result
+    /// applies to `bestTranscription.formattedString`. `substringRange` is
+    /// the documented way to map a segment back onto its formatted text.
+    private func utterances(from segments: [SFTranscriptionSegment], formattedString: String, generation: Int) -> [Utterance] {
+        let writer = audioWriter
+        return SpeechTranscriptTimingMapper.utterances(
+            from: segments,
+            formattedString: formattedString,
+            audioOffset: { timestamp in
+                writer?.audioOffset(forGeneration: generation, segmentTimestamp: timestamp)
+            },
+            wallClock: { timestamp in
+                writer?.wallClock(forGeneration: generation, segmentTimestamp: timestamp)
+            },
+            fallbackWallClockAnchor: segmentAudioStartDate
+        )
     }
 
-    private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
+    private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?, generation: Int) {
+        // Rejects any callback still in flight from a request that's
+        // already been superseded -- a routine rollover, an interruption,
+        // a stop, or (since `requestGeneration` is never reset in `start()`)
+        // an entirely different, already-stopped reflection.
+        guard generation == requestGeneration else { return }
+
         if let result, segmentAudioStartDate != nil {
             let segments = result.bestTranscription.segments
             if !segments.isEmpty {
                 currentSegmentUtterances = utterances(
                     from: segments,
                     formattedString: result.bestTranscription.formattedString,
-                    now: Date()
+                    generation: generation
                 )
             }
 
@@ -643,7 +700,16 @@ final class SpeechRecognitionManager: ObservableObject {
             }
         }
 
-        guard let error else { return }
+        // Apple's resultHandler can deliver a final result *and* an error
+        // in the same callback -- computing this once and guarding on
+        // `currentGenerationState` (set to `.sealed` immediately below,
+        // before any of the branches that might call `beginListeningSegment()`,
+        // which advances to a new, `.active` generation) ensures this
+        // segment only ever rolls over once, even if both conditions are
+        // true at once.
+        let shouldRollover = (result?.isFinal == true) || (error != nil)
+        guard shouldRollover, currentGenerationState != .sealed else { return }
+        currentGenerationState = .sealed
 
         if isStoppingIntentionally {
             statusMessage = "Speech capture stopped."
@@ -656,23 +722,42 @@ final class SpeechRecognitionManager: ObservableObject {
 
         if wasRecordingBeforeInterruption {
             // The system is mid-interruption (a call, Siri, or another app
-            // just took the microphone). This segment ending is expected —
-            // handleInterruption(type:optionsValue:) will restart listening once the
-            // interruption ends, so don't treat this as a failure.
+            // just took the microphone). handleInterruption(type:optionsValue:)
+            // already sealed this segment and will restart listening once
+            // the interruption ends -- don't treat this as a failure.
             return
         }
 
-        if isRecording {
-            // Not an interruption — most likely Apple's speech engine ending
-            // this segment on its own after continuous speech. Seal what we
-            // have and quietly keep going instead of stopping the reflection.
-            sealCurrentSegment()
-            statusMessage = "Listening (continuing)."
-            beginListeningSegment()
-        } else {
-            statusMessage = "Speech error: \(error.localizedDescription)"
+        guard isRecording else {
+            statusMessage = "Speech error: \(error?.localizedDescription ?? "unknown")"
             stop()
+            return
         }
+
+        guard !isRestartLoopDetected() else {
+            statusMessage = "Speech recognition kept failing -- stopped."
+            stop()
+            return
+        }
+
+        // Not an interruption, not a stop, and not a loop -- most likely
+        // Apple's speech engine ending this segment on its own after
+        // continuous speech, or a transient recognition error. Seal what we
+        // have and quietly keep going instead of stopping the reflection.
+        sealCurrentSegment()
+        statusMessage = "Listening (continuing)."
+        beginListeningSegment()
+    }
+
+    /// Returns `true` if recent auto-restarts (triggered by a recognition
+    /// error while still recording) are happening faster than a person
+    /// could plausibly be causing on purpose -- a sign something is
+    /// persistently failing rather than Apple's normal ~1-minute rollover.
+    private func isRestartLoopDetected() -> Bool {
+        let now = Date()
+        recentAutoRestarts.removeAll { now.timeIntervalSince($0) > 10 }
+        recentAutoRestarts.append(now)
+        return recentAutoRestarts.count > 5
     }
 
     private func sealCurrentSegment() {
@@ -685,15 +770,14 @@ final class SpeechRecognitionManager: ObservableObject {
         case .began:
             guard isRecording else { return }
             wasRecordingBeforeInterruption = true
+            currentGenerationState = .sealed
             sealCurrentSegment()
 
             if audioEngine.isRunning {
                 audioEngine.stop()
                 audioEngine.inputNode.removeTap(onBus: 0)
             }
-            recognitionRequest?.endAudio()
-            currentRequestBox.clear()
-            recognitionRequest = nil
+            currentRequestBox.endAndClear()
             recognitionTask = nil
             isRecording = false
             statusMessage = "Paused — interrupted (call, Siri, or another app)."
@@ -729,24 +813,18 @@ final class SpeechRecognitionManager: ObservableObject {
     func stop() {
         isStoppingIntentionally = true
         wasRecordingBeforeInterruption = false
+        currentGenerationState = .sealed
 
         if audioEngine.isRunning {
             audioEngine.stop()
             audioEngine.inputNode.removeTap(onBus: 0)
         }
 
-        recognitionRequest?.endAudio()
-        currentRequestBox.clear()
-
-        recognitionRequest = nil
+        currentRequestBox.endAndClear()
         recognitionTask = nil
         isRecording = false
         silenceTracker.reset()
         currentOnSilenceGap = nil
-
-        // AVAudioFile has no explicit close() -- releasing it finalizes the
-        // file on disk.
-        audioFile = nil
         pendingAudioFileURL = nil
 
         do {
@@ -754,5 +832,20 @@ final class SpeechRecognitionManager: ObservableObject {
         } catch {
             // Safe to ignore for prototype.
         }
+    }
+
+    /// Flushes every write already accepted by the background audio
+    /// writer, then returns a diagnostics snapshot and releases the writer
+    /// so its `AVAudioFile` finalizes on disk. Callers (ReflectionSessionStore)
+    /// must await this before treating this reflection's saved audio as
+    /// complete -- in particular, before handing it to
+    /// SpeakerDiarizationEngine. Returns `nil` if no audio was ever being
+    /// written for this reflection.
+    func finishAudioCapture() async -> (isReliable: Bool, missingAudioIntervals: [AudioInterval])? {
+        guard let writer = audioWriter else { return nil }
+        await writer.flush()
+        let diagnostics = writer.diagnosticsSnapshot()
+        audioWriter = nil
+        return diagnostics
     }
 }

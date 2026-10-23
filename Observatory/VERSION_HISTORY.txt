@@ -643,3 +643,84 @@ Status:
 Known issues documented, fix plan written, implementation not yet started
 -- see STABILIZATION_AND_EXPRESSION_PLAN.md "Status" line for the current
 state.
+
+
+v118 — Stage 0 validation: replay harness, fidelity root-cause found, live smoke test failed
+
+Date: 2026-10-18 to 2026-10-22
+
+Closes point F of Stage 0 (the test-only replay harness validating the
+saved fixtures through the corrected recognition/timing path) and runs a
+ten-experiment investigation (E1-E10) into why on-device transcription
+fidelity failed the 70% floor on all three fixtures. Not a single
+feature; summary:
+
+- Added Observatory/SpeechTranscriptTimingMapper.swift, extracting the
+  segment-to-utterance mapping shared by both the live mic path and the
+  new replay harness.
+- Rebuilt ObservatoryTests/FixtureReplayHarness.swift and added
+  ObservatoryTests/AudioFixtureReplayTests.swift: single-request replay,
+  chunked replay matching production's ~1-minute rollover, a real
+  AVAudioEngine/AVAudioPlayerNode live-tap feed path, a raw per-callback
+  instrumentation hook, and a silence-padded passage-position control --
+  all numeric-only output, never transcript text (SECURITY.md).
+- Models.swift additions supporting the above: audioRecordingReliable,
+  missingAudioIntervals, RawDiarizationSegment, DiarizationFilteringDecision,
+  optional word audioStart/audioEnd.
+- Generated new, gitignored fixture variants for controlled A/B testing
+  (loudnorm, identity re-encode, fixed per-fixture gain) -- the three
+  original fixtures stay read-only baselines, untouched, and (like all
+  fixtures) are not tracked in git.
+- Found and fixed a Swift 6 sendability warning (a plain captured `var`
+  read from a non-isolated AsyncThrowingStream termination closure) by
+  wrapping the feeding Task in the same lock-protected box pattern already
+  used elsewhere in the harness.
+- Root-caused the fidelity floor failure (E8/E9, on physical iPhone 16 Pro
+  / iOS 27.0.1): SFSpeechRecognitionResult.bestTranscription exhibits
+  replacement-not-cumulative semantics across internal utterance
+  boundaries within one continuous request -- confirmed by raw
+  pre-aggregation callback logging (segment count/length repeatedly drop
+  mid-stream) and a silence-padded control (a passage recovers fully
+  regardless of position when the padding is silence, not competing
+  speech). Ruled out as the dominant cause: signal level alone (gain
+  helps two of three fixtures partially, not the third at all), feed
+  mechanism (manual-append loop vs. a real engine tap), re-encoding, and
+  audio session category. Independently reviewed and scoped by ChatGPT
+  across two review passes (PROPOSALS/U1-chatgpt-review-brief*.md) -- the
+  claim is scoped to this device/OS/configuration, not asserted as a
+  universal API rule.
+- Reframed the U2 privacy/fidelity decision: prior fidelity numbers
+  undercount what the local recognizer actually produced during
+  processing (final-result-only collection discards it), so they don't
+  yet establish the local recognizer's achievable accuracy. Queued a new
+  unit (U5) to prototype transcript accumulation across reset events,
+  test-only first, with required accuracy/timing/duplicate-detection
+  validation before any production change -- a naive drop-and-concatenate
+  approach is explicitly not approved as a production algorithm.
+- Ran the live on-device smoke test (rollover + interruption) -- FAILED.
+  Crossing the ~1-minute rollover was fine, but a chained interruption
+  (Observatory -> Siri -> Maps, a second foreground app -> manual close
+  -> back to Observatory) left speech recognition silently dead for the
+  rest of a ~2m30s reflection (persisted: 2 events/4 words/34 chars).
+  Forensic verification of a device-container backup (taken before any
+  rebuild) found two further defects: audioRecordingReliable=true /
+  missingAudioIntervals=0 recorded on that session despite the
+  interruption (the D-09 reliability gate never saw the disruption), and
+  an orphaned header-only recording (4096 bytes) that was never finalized
+  (the crash/abandon path bypasses writer finalization). A clean
+  follow-up recording with no interruption (73.3s, 37 words) independently
+  confirmed the E8 fidelity-floor finding in production, not just in the
+  replay harness. Queued as a new unit (U6, ahead of U5) requiring its own
+  proposal/review -- not fixed here.
+
+Status:
+
+Fixture-replay validation complete; fidelity floor not met, root cause
+isolated with evidence (not a Stage 0 regression). Live on-device smoke
+test run and FAILED, surfacing two further production capture-lifecycle
+defects (interruption-chain recovery, reliability-gate/finalization
+integrity) -- see U6 in PLAN.md. Director ruling: this version commits
+with the failure and both defects stated plainly, no "works" language;
+fixes for U6 and the accumulation prototype for U5 are separate units,
+not done here. Smoke-test re-run (clean pass) is U6's exit criterion, not
+this version's.

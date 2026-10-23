@@ -143,7 +143,7 @@ struct ObservatoryScreen: View {
             onStart: { startReflectionAndSpeech() },
             onStop: {
                 speechManager.stop()
-                stopAndFetchBiometrics()
+                stopAndFetchBiometrics(finishAudioCapture: { await speechManager.finishAudioCapture() })
             }
         )
         .padding(.horizontal)
@@ -191,12 +191,12 @@ struct ObservatoryScreen: View {
     /// HealthKit query is a real async round trip, so this can't be part of
     /// that same synchronous call. Captures the session's ID/time window
     /// right after stopping, before anything else can mutate `activeSession`.
-    private func stopAndFetchBiometrics() {
+    private func stopAndFetchBiometrics(finishAudioCapture: @escaping () async -> (isReliable: Bool, missingAudioIntervals: [AudioInterval])?) {
         let sessionID = store.activeSession?.id
         let reflectionStart = store.activeSession?.startedAt
         let reflectionEnd = store.activeSession?.endedAt ?? Date()
 
-        store.stopAndObserve()
+        store.stopAndObserve(finishAudioCapture: finishAudioCapture)
 
         guard let sessionID, let reflectionStart else { return }
 

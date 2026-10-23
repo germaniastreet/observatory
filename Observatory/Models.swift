@@ -203,6 +203,28 @@ struct ReflectionSession: Identifiable, Codable {
     /// SpeakerDiarizationEngine.label's doc comment.
     var diarizationEngineVersion: String? = nil
 
+    /// Whether the background audio writer (SpeechRecognitionManager.AudioFileWriter)
+    /// finished this reflection's `.caf` file without any lost/failed
+    /// writes. `nil` means unknown -- either this reflection predates the
+    /// writer reporting this at all, or no audio was ever being written.
+    /// `false` means SpeakerDiarizationEngine should not be trusted to run
+    /// against this file; see `missingAudioIntervals` for where it's short.
+    var audioRecordingReliable: Bool? = nil
+
+    /// Spans of the saved audio file known to be missing or unreliable.
+    /// Empty (not nil) when recording finished cleanly; nil only for
+    /// reflections that predate this field.
+    var missingAudioIntervals: [AudioInterval]? = nil
+
+    /// Every raw segment SpeakerKit returned for this session, independent
+    /// of filtering -- see `RawDiarizationSegment`'s doc comment. nil if
+    /// diarization hasn't run (same meaning as `diarizationEngineVersion == nil`).
+    var diarizationRawSegments: [RawDiarizationSegment]? = nil
+
+    /// Per-raw-speaker-ID record of whether it cleared the distinct-speaker
+    /// floors, and the actual duration/proportion numbers behind that call.
+    var diarizationFilteringDecisions: [DiarizationFilteringDecision]? = nil
+
     var durationSeconds: Int {
         let end = endedAt ?? Date()
         return max(0, Int(end.timeIntervalSince(startedAt)))
@@ -247,12 +269,81 @@ struct TranscriptEvent: Identifiable, Codable {
     var words: [WordTiming] = []
 }
 
+/// One raw SpeakerKit segment, kept for audit independent of whether it
+/// survived SpeakerDiarizationEngine's duration/proportion filtering --
+/// counts alone ("Speaker A: 27 entries") can't explain *why* a voice was
+/// missed or a boundary misplaced, the actual segments can.
+struct RawDiarizationSegment: Codable, Hashable {
+    var startTime: TimeInterval
+    var endTime: TimeInterval
+
+    /// Human-readable form of SpeakerKit's `SpeakerInfo` for this segment --
+    /// a raw speaker ID, "multiple(...)" for model-reported overlap, or
+    /// "noMatch".
+    var speakerDescription: String
+}
+
+/// Whether one raw speaker ID's segments cleared SpeakerDiarizationEngine's
+/// `minimumSpeakerDuration`/`minimumSpeakerProportion` floors to count as a
+/// distinct person, and the actual numbers behind that decision.
+struct DiarizationFilteringDecision: Codable, Hashable {
+    var speakerDescription: String
+    var totalDuration: TimeInterval
+    var proportionOfSubstantialTotal: Double
+    var passed: Bool
+}
+
+/// A span of audio, in seconds relative to the start of a saved `.caf`
+/// file, that's known to be missing or unreliable -- e.g. the background
+/// audio writer dropped or failed to write a buffer for that span. Used to
+/// honestly gate diarization/acoustic analysis rather than silently running
+/// them against a file known to be incomplete.
+struct AudioInterval: Codable, Hashable {
+    var start: TimeInterval
+    var end: TimeInterval
+}
+
 /// One recognized word (or short phrase segment) with its own real timing,
 /// straight from SFTranscriptionSegment via SpeechRecognitionManager.
 struct WordTiming: Codable, Hashable {
     var text: String
     var start: Date
     var end: Date
+
+    /// Position within the saved `.caf` audio file, in seconds -- the
+    /// coordinate system SpeakerDiarizationEngine's RTTM-derived segments
+    /// already use. `nil` means "not available," never "zero": a reflection
+    /// saved before this existed has no way to know its words' real audio
+    /// offsets, and treating that as 0 would wrongly place every one of its
+    /// words at the very start of the file. SpeakerDiarizationEngine's
+    /// word-level matcher skips words with a `nil` offset entirely rather
+    /// than guessing.
+    var audioStart: TimeInterval?
+    var audioEnd: TimeInterval?
+
+    init(text: String, start: Date, end: Date, audioStart: TimeInterval? = nil, audioEnd: TimeInterval? = nil) {
+        self.text = text
+        self.start = start
+        self.end = end
+        self.audioStart = audioStart
+        self.audioEnd = audioEnd
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text, start, end, audioStart, audioEnd
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        text = try container.decode(String.self, forKey: .text)
+        start = try container.decode(Date.self, forKey: .start)
+        end = try container.decode(Date.self, forKey: .end)
+        // Both absent in every reflection saved before this field existed --
+        // decodeIfPresent already yields nil in that case, but spelled out
+        // explicitly since that nil is load-bearing, not an oversight.
+        audioStart = try container.decodeIfPresent(TimeInterval.self, forKey: .audioStart)
+        audioEnd = try container.decodeIfPresent(TimeInterval.self, forKey: .audioEnd)
+    }
 }
 
 /// Not a fixed two-party enum -- `.other` carries a label (e.g. "Speaker 2",
@@ -266,6 +357,21 @@ enum Speaker: Codable, Hashable {
     case user
     case other(String)
 
+    /// Diarization reported this span as more than one speaker's voice at
+    /// once (SpeakerKit's `SpeakerInfo.multiple`) -- genuinely simultaneous
+    /// speech, not a word that merely spans two adjacent segments' boundary.
+    /// Deliberately distinct from `.unknown`: this is positive evidence of
+    /// overlap, not an absence of evidence.
+    case overlap
+
+    /// Diarization reported no speaker match for this span at all
+    /// (SpeakerKit's `SpeakerInfo.noMatch`), or the word's audio offset
+    /// wasn't available to attempt a match. Distinct from defaulting to
+    /// `.user` -- once multiple voices are already known to exist in a
+    /// session, silently asserting ownership of unmatched speech would be a
+    /// guess presented as a fact.
+    case unknown
+
     /// Kept as a computed property (rather than RawRepresentable) so every
     /// existing `.rawValue` call site across the app keeps compiling exactly
     /// as before.
@@ -273,6 +379,8 @@ enum Speaker: Codable, Hashable {
         switch self {
         case .user: return "You"
         case .other(let label): return label
+        case .overlap: return "Overlapping speech"
+        case .unknown: return "Unknown speaker"
         }
     }
 
@@ -291,9 +399,14 @@ enum Speaker: Codable, Hashable {
 
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let kind = try container.decode(String.self, forKey: .kind)
-        if kind == "user" {
+        switch kind {
+        case "user":
             self = .user
-        } else {
+        case "overlap":
+            self = .overlap
+        case "unknown":
+            self = .unknown
+        default:
             self = .other(try container.decode(String.self, forKey: .label))
         }
     }
@@ -303,6 +416,10 @@ enum Speaker: Codable, Hashable {
         switch self {
         case .user:
             try container.encode("user", forKey: .kind)
+        case .overlap:
+            try container.encode("overlap", forKey: .kind)
+        case .unknown:
+            try container.encode("unknown", forKey: .kind)
         case .other(let label):
             try container.encode("other", forKey: .kind)
             try container.encode(label, forKey: .label)

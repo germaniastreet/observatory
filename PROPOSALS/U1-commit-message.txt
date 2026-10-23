@@ -1,0 +1,30 @@
+Add Stage 0 validation harness; fidelity root cause found; live smoke test FAILED
+
+New test-only replay harness (FixtureReplayHarness.swift) and diagnostic
+tests (AudioFixtureReplayTests.swift) validate the three saved fixtures
+through the corrected recognition/timing path, sharing a new
+SpeechTranscriptTimingMapper.swift with the live mic path. A
+ten-experiment investigation (E1-E10, independently reviewed twice)
+root-caused the on-device fidelity-floor failure to
+SFSpeechRecognitionResult's replacement-not-cumulative semantics across
+internal utterance boundaries on this device/OS/config -- not primarily
+signal level, feed mechanism, or session category, all tested and ruled
+out. No fix is included; a test-only accumulation prototype is deferred
+to its own unit (U5).
+
+The live on-device smoke test (rollover + interruption) FAILED. A
+chained interruption (Observatory -> Siri -> Maps -> manual close ->
+Observatory) left speech recognition silently dead for the rest of a
+~2m30s reflection. Forensic verification of a device backup found two
+further defects: (1) audioRecordingReliable/missingAudioIntervals did not
+record the disruption, so the D-09 reliability gate would pass
+contaminated data downstream; (2) an orphaned header-only recording was
+never finalized on the crash/abandon path. Neither is fixed here --
+scoped as a new unit (U6, ahead of U5), requiring its own proposal and
+review before any change to SpeechRecognitionManager.swift.
+
+This commit is a checkpoint of validated findings, not working
+transcription: the fidelity floor is not met and the interruption/
+reliability defects are unresolved. See PLAN.md and
+STABILIZATION_AND_EXPRESSION_PLAN.md for full detail and the open-unit
+queue (U5, U6).

@@ -12,3 +12,6 @@ build/
 Archives/
 saved versions/
 *.zip
+
+# Local-only speech fixtures; recordings may contain sensitive audio
+ObservatoryTests/Fixtures/*.caf
