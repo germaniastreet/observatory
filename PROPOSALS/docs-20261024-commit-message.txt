@@ -1,0 +1,7 @@
+Record owner product vision, adopt D-18, re-sequence queue; close U6b; stage U5 proposal
+
+- PLAN.md: owner's SaMD-grade aural-behavior instrument vision (2026-10-24) recorded in the project one-liner; queue re-sequenced per owner direction to U4a -> U5 -> U2 -> U3 -> U4; U4a entry added (NEXT, proposal-first); U6b marked CLOSED at fa7651e with the device-verified record
+- DECISIONS.md: add D-18 (incomplete sessions get coverage-scoped analysis, not blanket exclusion)
+- PROPOSALS/U5-proposal.md: Claude's test-only transcript-accumulation prototype proposal, awaiting director review (queued after U4a)
+
+Docs only; no code changes.
