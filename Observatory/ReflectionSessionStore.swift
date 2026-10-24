@@ -232,7 +232,7 @@ final class ReflectionSessionStore: ObservableObject {
     /// as before. The flush only needs to finish before diarization opens
     /// the file, not before the UI shows the reflection as complete.
     func stopAndObserve(
-        finishAudioCapture: @escaping () async -> (isReliable: Bool, missingAudioIntervals: [AudioInterval])? = { nil }
+        finishAudioCapture: @escaping () async -> (isReliable: Bool, missingAudioIntervals: [AudioInterval], recognitionContinuityGaps: [Date], captureCompleteness: CaptureCompleteness)? = { nil }
     ) {
         guard var session = activeSession else { return }
 
@@ -335,10 +335,33 @@ final class ReflectionSessionStore: ObservableObject {
             if let diagnostics = await finishAudioCapture() {
                 sessionForDiarization.audioRecordingReliable = diagnostics.isReliable
                 sessionForDiarization.missingAudioIntervals = diagnostics.missingAudioIntervals
+                sessionForDiarization.recognitionContinuityGaps = diagnostics.recognitionContinuityGaps
+                sessionForDiarization.captureCompleteness = diagnostics.captureCompleteness
             }
             let labeled = await SpeakerDiarizationEngine.label(session: sessionForDiarization)
             self.applyDiarizedTranscript(labeled)
         }
+    }
+
+    /// Wired to `SpeechRecognitionManager`'s `onRecordingEnded` callback
+    /// (via the owning screen, which holds both the manager and this
+    /// store) so a reflection that ends WITHOUT an explicit user `stop()`
+    /// -- recovery exhausted, or on-device recognition became unsupported
+    /// mid-reflection -- still gets finalized through the same completion
+    /// mechanics `stopAndObserve()` uses, instead of staying stuck in
+    /// `.recording` forever with no further updates and no UI path to end
+    /// it. Ignores a callback that doesn't match the currently active
+    /// session (a stale trigger from an already-superseded reflection) and
+    /// is exactly-once per session: once `stopAndObserve()` below has
+    /// already flipped `state` away from `.recording`, a second call for
+    /// the same `reflectionID` is a safe no-op.
+    func handleRecordingEndedUnexpectedly(
+        reflectionID: UUID,
+        reason: SpeechRecognitionManager.RecordingEndReason,
+        finishAudioCapture: @escaping () async -> (isReliable: Bool, missingAudioIntervals: [AudioInterval], recognitionContinuityGaps: [Date], captureCompleteness: CaptureCompleteness)? = { nil }
+    ) {
+        guard let session = activeSession, session.id == reflectionID, session.state == .recording else { return }
+        stopAndObserve(finishAudioCapture: finishAudioCapture)
     }
 
     /// Patches in speaker labels found by SpeakerDiarizationEngine after the
@@ -351,6 +374,8 @@ final class ReflectionSessionStore: ObservableObject {
             completedSessions[index].diarizationEngineVersion = labeled.diarizationEngineVersion
             completedSessions[index].audioRecordingReliable = labeled.audioRecordingReliable
             completedSessions[index].missingAudioIntervals = labeled.missingAudioIntervals
+            completedSessions[index].recognitionContinuityGaps = labeled.recognitionContinuityGaps
+            completedSessions[index].captureCompleteness = labeled.captureCompleteness
             completedSessions[index].diarizationRawSegments = labeled.diarizationRawSegments
             completedSessions[index].diarizationFilteringDecisions = labeled.diarizationFilteringDecisions
         }
@@ -360,6 +385,8 @@ final class ReflectionSessionStore: ObservableObject {
             activeSession?.diarizationEngineVersion = labeled.diarizationEngineVersion
             activeSession?.audioRecordingReliable = labeled.audioRecordingReliable
             activeSession?.missingAudioIntervals = labeled.missingAudioIntervals
+            activeSession?.recognitionContinuityGaps = labeled.recognitionContinuityGaps
+            activeSession?.captureCompleteness = labeled.captureCompleteness
             activeSession?.diarizationRawSegments = labeled.diarizationRawSegments
             activeSession?.diarizationFilteringDecisions = labeled.diarizationFilteringDecisions
         }

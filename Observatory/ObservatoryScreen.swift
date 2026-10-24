@@ -15,6 +15,7 @@ struct ObservatoryScreen: View {
     /// or stopping a reflection from either tab controls the same recording.
     @EnvironmentObject private var speechManager: SpeechRecognitionManager
     @EnvironmentObject private var healthKitManager: HealthKitManager
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var pendingConsentConfirmation = false
     @State private var pendingDeleteSession: ReflectionSession?
@@ -106,6 +107,14 @@ struct ObservatoryScreen: View {
                 stopHapticFeedback()
             }
         }
+        .onChange(of: scenePhase) { _, newPhase in
+            // Per ChatGPT's review (U6): becoming active again only asks
+            // the manager to reconcile an interrupted session -- it never
+            // independently starts capture on its own.
+            if newPhase == .active {
+                speechManager.reconcileAfterForeground()
+            }
+        }
     }
 
     private func startHapticFeedback() {
@@ -178,6 +187,13 @@ struct ObservatoryScreen: View {
                 },
                 onSilenceGap: { start, duration in
                     store.recordSilenceGap(start: start, duration: duration)
+                },
+                onRecordingEnded: { reflectionID, reason in
+                    store.handleRecordingEndedUnexpectedly(
+                        reflectionID: reflectionID,
+                        reason: reason,
+                        finishAudioCapture: { await speechManager.finishAudioCapture() }
+                    )
                 }
             )
         }
@@ -191,7 +207,7 @@ struct ObservatoryScreen: View {
     /// HealthKit query is a real async round trip, so this can't be part of
     /// that same synchronous call. Captures the session's ID/time window
     /// right after stopping, before anything else can mutate `activeSession`.
-    private func stopAndFetchBiometrics(finishAudioCapture: @escaping () async -> (isReliable: Bool, missingAudioIntervals: [AudioInterval])?) {
+    private func stopAndFetchBiometrics(finishAudioCapture: @escaping () async -> (isReliable: Bool, missingAudioIntervals: [AudioInterval], recognitionContinuityGaps: [Date], captureCompleteness: CaptureCompleteness)?) {
         let sessionID = store.activeSession?.id
         let reflectionStart = store.activeSession?.startedAt
         let reflectionEnd = store.activeSession?.endedAt ?? Date()

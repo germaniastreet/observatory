@@ -1,0 +1,66 @@
+Fix interruption-chain recovery and add an honest capture-completeness record (U6)
+
+Replaces the two independent isRecording/wasRecordingBeforeInterruption
+booleans in SpeechRecognitionManager with an explicit lifecycle state
+machine and a shared attemptRecovery(trigger:forReflection:) path used by
+routine rollover, recognition errors, interruption-ended resume, a new
+20s watchdog, and a new scenePhase-foreground-reconciliation backstop.
+Recovery is gated by two independent stall conditions: Mode A
+(recognition goes silent while capture continues -- the original
+smoke-test incident's suspected mechanism) and Mode B (stuck after a
+failed restart attempt -- the mechanism a first device run under this
+fix actually exposed). A new consecutive-failure budget, separate from
+the existing rate-window guard, ends a reflection honestly after five
+failed restart attempts instead of silently freezing forever. A
+stale-tap-reference bug found while building this (a discarded audio
+writer's buffer callback could keep silently feeding it) is fixed with a
+lock-protected writer box, mirroring the existing request/generation box
+pattern.
+
+The reliability record gains a second, separate signal:
+ReflectionSession.captureCompleteness (.complete / .incomplete(
+endpointAudioSeconds:) / nil=unknown for legacy records, never decoded
+or defaulted as complete). It is established only from lifecycle
+evidence -- an interruption's .began teardown -- never from a
+session-duration/file-duration mismatch alone, and a later successful
+recovery does not erase an earlier outage. audioRecordingReliable and
+missingAudioIntervals keep their exact prior write-integrity meaning,
+unchanged. SpeakerDiarizationEngine now skips a confirmed-incomplete
+session in the same change. This design went through two ChatGPT review
+rounds (reject boolean-overload, reject fabricated-interval options)
+before implementation.
+
+Verified: 53/53 simulator-eligible unit tests pass (the project's 8
+pre-existing device-only AudioFixtureReplayTests diagnostics fail in a
+bare simulator host for an unrelated, pre-existing reason -- no granted
+Speech-recognition authorization). Two live on-device smoke-test runs,
+both Hermes-forensically verified against device-container backups and
+console logs. The first FAILED: it found the Mode-B zombie-recovery
+defect and the dishonest reliability record this unit exists to fix. The
+second PASSED: the Mode-B watchdog retry succeeded after an initial
+restart failure (NSOSStatusErrorDomain 561015905, "Session activation
+failed" -- now logged where it previously wasn't), 69 words were
+transcribed after recovery, and the finalized session record was honest
+(captureCompleteness=.incomplete with the exact file endpoint,
+diarization skipped, both recognition-continuity-gap timestamps inside
+the actual outage window).
+
+Not fixed here, stated plainly rather than silently closed:
+- Mode A -- the original smoke-test incident's own mechanism, a silent
+  recognition-callback death while capture continues -- was not
+  reproduced by either device run and remains device-unverified (logic-
+  tested only).
+- A roughly 36-second dead window between a failed restart and the next
+  watchdog retry is a real capture gap. It is now honestly recorded
+  instead of hidden, but not shortened; a fast-backoff retry to shrink it
+  is a queued improvement candidate, not implemented in this unit.
+- Downstream analysis/observation engines (summary, arc, dynamics,
+  correlation, etc.) still narrate a partial transcript as if it were
+  complete -- audited and confirmed to be existing unit U3's scope
+  (diarization-aware attribution), not expanded here.
+- E8's recognizer-side result-replacement defect and U5's accumulation
+  prototype are unrelated and remain open separately.
+
+See PLAN.md's U6 entry for the full criterion-by-criterion record of
+both device runs, and DECISIONS.md D-17 for the capture-completeness
+design ruling.

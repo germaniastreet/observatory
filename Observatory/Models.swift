@@ -216,6 +216,34 @@ struct ReflectionSession: Identifiable, Codable {
     /// reflections that predate this field.
     var missingAudioIntervals: [AudioInterval]? = nil
 
+    /// Wall-clock moments a recognition-continuity gap was recovered from
+    /// during this session -- i.e. the recognition task errored, went
+    /// silent, or was interrupted while the audio writer confirms capture
+    /// itself continued. Deliberately NOT an `AudioInterval`: there is no
+    /// missing audio span to report (D-05's file timeline has no "hole"
+    /// when every buffer still wrote successfully), only the moments
+    /// recovery was attempted -- no duration is claimed. Empty (not nil)
+    /// when no such gap occurred; nil only for reflections that predate
+    /// this field. See `missingAudioIntervals` for the separate,
+    /// unrelated audio-loss signal this does not overload.
+    var recognitionContinuityGaps: [Date]? = nil
+
+    /// Whole-session capture-completeness evidence, established from
+    /// LIFECYCLE signals (capture ceased via an interruption's `.began`
+    /// teardown, recovery did not restore it before the session ended) --
+    /// NEVER from a session-duration/file-duration mismatch alone, which
+    /// is corroboration/detection only, never the sole basis. `nil` means
+    /// unknown -- predates this field, or was never determined -- and
+    /// must NEVER be treated as `.complete` by any consumer. A later
+    /// successful recovery does not erase an earlier outage: this
+    /// describes WHOLE-SESSION completeness, not "is capture healthy
+    /// right now." Separate from, and not a replacement for,
+    /// `audioRecordingReliable` (write-failure integrity) or
+    /// `recognitionContinuityGaps` (recognition-only gaps while capture
+    /// continued) -- see `SpeechRecognitionManager.hadCaptureOutage`'s doc
+    /// comment for the establishment rule.
+    var captureCompleteness: CaptureCompleteness? = nil
+
     /// Every raw segment SpeakerKit returned for this session, independent
     /// of filtering -- see `RawDiarizationSegment`'s doc comment. nil if
     /// diarization hasn't run (same meaning as `diarizationEngineVersion == nil`).
@@ -301,6 +329,22 @@ struct DiarizationFilteringDecision: Codable, Hashable {
 struct AudioInterval: Codable, Hashable {
     var start: TimeInterval
     var end: TimeInterval
+}
+
+/// Whole-session capture-completeness status -- see
+/// `ReflectionSession.captureCompleteness`'s doc comment for the full
+/// establishment rule and what this does/doesn't claim.
+enum CaptureCompleteness: Codable, Equatable {
+    case complete
+    /// `endpointAudioSeconds`, when known, is the saved file's own
+    /// audio-file-relative ENDPOINT (its last successfully-written
+    /// frame) -- it marks ONLY where the saved audio ends. It does NOT
+    /// mean "known-good through this point" (nothing here vouches for
+    /// every second before it being continuous), does NOT establish WHEN
+    /// capture actually stopped, and does NOT measure how much wall-clock
+    /// time is missing. `nil` here means the endpoint itself isn't known,
+    /// not that capture was complete.
+    case incomplete(endpointAudioSeconds: TimeInterval?)
 }
 
 /// One recognized word (or short phrase segment) with its own real timing,

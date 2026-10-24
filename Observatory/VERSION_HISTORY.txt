@@ -724,3 +724,102 @@ with the failure and both defects stated plainly, no "works" language;
 fixes for U6 and the accumulation prototype for U5 are separate units,
 not done here. Smoke-test re-run (clean pass) is U6's exit criterion, not
 this version's.
+
+v119 — U6: interruption-chain recovery, bounded failure budget, honest capture-completeness record
+
+Date: 2026-10-23
+
+Fixes the two production capture-lifecycle defects the live smoke test exposed in v118: recognition could get permanently stuck after a chained interruption (Siri -> Maps -> return) with no way back, and the reliability record stayed "clean" even when real audio went uncaptured. Review history: ChatGPT brief #3 (pre-implementation, approve-with-changes) drove proposal revisions R1-R2.5; the director's code inspection of the first implementation caught a watchdog-gate defect (R3); the first device run's failure drove R4 (recovery fixes) and ChatGPT brief #4 ruled on the capture-completeness schema (R5, -> D-17). Two device smoke-test runs, first FAILED, second PASSED with documented caveats.
+
+- SpeechRecognitionManager.swift: replaced the two independent isRecording/
+  wasRecordingBeforeInterruption booleans with an explicit lifecycle state
+  machine (idle/active/recovering/stopped) plus a per-reflection
+  reflectionID that invalidates stale triggers. One shared
+  attemptRecovery(trigger:forReflection:) path now serves routine
+  rollover, recognition errors, interruption-ended resume, a new 20s
+  watchdog, and a new scenePhase-foreground-reconciliation backstop --
+  gated by two independent stall conditions (Mode A: recognition silent
+  while capture continues; Mode B: stuck in .recovering after a failed
+  restart, found by the first device run and fixed by removing the
+  Mode-A-only buffers-flowing requirement that made a dead engine
+  permanently unrecoverable). A new consecutive-failure budget (separate
+  from the existing rate-window guard, which stays unchanged) ends a
+  reflection honestly after five failed restart attempts instead of
+  silently stopping forever.
+- A new AudioWriterBox (mirroring the existing CurrentRequestBox/
+  GenerationBox pattern) fixes a stale-tap-reference bug: the realtime
+  tap's buffer callback now reads the current writer through a
+  lock-protected box instead of a frozen capture-list snapshot, so a
+  discarded writer can never keep silently receiving buffers.
+  discardCurrentAudioWriterIfAny() flushes, then deletes a writer with
+  zero successfully-written frames (verified by frame count, not file
+  size) or keeps one with real content.
+- Models.swift: new ReflectionSession.recognitionContinuityGaps ([Date]?,
+  wall-clock instants only, no fabricated duration) for recognition-only
+  gaps while capture continues, and new captureCompleteness
+  (CaptureCompleteness?: .complete / .incomplete(endpointAudioSeconds:) /
+  nil=unknown-legacy) for whole-session capture completeness, established
+  only from lifecycle evidence (an interruption's .began teardown),
+  never erased by a later successful recovery, never from a duration/
+  file-length mismatch alone (D-17). audioRecordingReliable/
+  missingAudioIntervals keep their exact prior write-integrity meaning,
+  unchanged.
+- SpeakerDiarizationEngine.swift: skips diarization entirely on a
+  confirmed-incomplete session, alongside the existing unreliable-audio
+  skip.
+- ReflectionSessionStore.swift: new handleRecordingEndedUnexpectedly(
+  reflectionID:reason:finishAudioCapture:), wired from both screens, so a
+  reflection that ends via the new failure budget (not an explicit user
+  Stop) still finalizes honestly instead of staying stuck in .recording
+  forever.
+- Fixed a bug found while building the above: finishWithFailure() was
+  discarding the audio writer before the callback chain ever reached
+  finishAudioCapture(), so every terminal-failure session -- exactly the
+  ones this unit exists to diagnose -- silently lost its reliability/
+  completeness diagnostics. It now only discards eagerly when no listener
+  is wired; otherwise finishAudioCapture() is the single place that reads
+  diagnostics and discards, for both a normal Stop and a terminal
+  failure.
+- [u6-recovery]-prefixed diagnostic logging added throughout the recovery
+  path (trigger/state/generation on every attempt, the actual error
+  domain/code on a failed restart, interruption .began/.ended details,
+  watchdog scheduling tokens) -- counts/identifiers/timings only, no
+  transcript text, per SECURITY.md.
+- ObservatoryTests/ObservatoryTests.swift: added logic-level simulator
+  tests covering the recovery state machine, both stall modes, the
+  zero/partial-write writer-discard decision, and captureCompleteness's
+  five acceptance scenarios (normal stop, unrecovered outage, outage then
+  recovery, delayed writer draining, legacy decode) -- 53/53 simulator-
+  eligible tests pass (the project's 8 pre-existing device-only
+  AudioFixtureReplayTests diagnostics fail in a bare simulator host for
+  an unrelated, pre-existing reason: no granted Speech-recognition
+  authorization).
+- Two live on-device smoke-test runs, both Hermes-forensically verified
+  against device-container backups and console logs. First run (iPhone
+  16 Pro) FAILED: found the Mode-B zombie-recovery defect and the
+  dishonest reliability record, plus a minor duplicate-watchdog-firing
+  anomaly under investigation. Second run PASSED with documented
+  caveats: the Mode-B watchdog retry succeeded this time after an
+  initial restart failure (NSOSStatusErrorDomain 561015905, "Session
+  activation failed" -- now logged), 69 words transcribed after
+  recovery, and the session record was honest (captureCompleteness=
+  .incomplete with the exact file endpoint, diarization skipped, both
+  recognitionContinuityGaps timestamps inside the actual outage window).
+
+Status:
+
+U6 implemented and device-verified with caveats (see PLAN.md for the
+full criterion-by-criterion record of both runs). Caveats carried
+forward, not silently closed: (1) Mode A -- the ORIGINAL smoke-test
+incident's mechanism, silent recognition-callback death while capture
+continues -- was not reproduced by either device run and remains
+device-unverified (logic-tested only); (2) a ~36-second dead window
+between a failed restart and the next watchdog retry is a real capture
+gap, now honestly recorded rather than hidden -- a fast-backoff retry to
+shrink it is a queued improvement candidate, not done here; (3)
+downstream analysis/observation engines still narrate partial
+transcripts as if complete -- audited and confirmed out of scope here,
+belongs to U3's existing diarization-aware-attribution work; (4) the E8
+recognizer-replacement-semantics defect and U5's accumulation prototype
+are unrelated, separate, still open. No "works perfectly" claim is made
+anywhere in this entry.

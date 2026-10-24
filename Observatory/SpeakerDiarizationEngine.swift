@@ -78,6 +78,19 @@ enum SpeakerDiarizationEngine {
         // through; only an explicit `false` blocks this.
         guard session.audioRecordingReliable != false else { return session }
 
+        // U6/R5.4: a confirmed-incomplete session's saved file isn't
+        // padded with silence for the missing span (D-05) -- it's simply
+        // shorter than the session's documented duration. Diarizing it
+        // would produce technically-correct results for whatever portion
+        // exists, but nothing downstream yet has any notion of "this only
+        // covers part of the session" to attach to those results (see
+        // PLAN.md U3 / PROPOSALS/U6-proposal.md R5.5) -- so this declines
+        // to diarize at all rather than assert partial coverage as
+        // complete. `nil`/`.complete` pass through unaffected.
+        if case .incomplete = session.captureCompleteness {
+            return session
+        }
+
         do {
             let audioArray = try AudioProcessor.loadAudioAsFloatArray(fromPath: audioURL.path)
             let speakerKit = try await SpeakerKit()
