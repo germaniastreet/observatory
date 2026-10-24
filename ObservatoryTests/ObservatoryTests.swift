@@ -840,6 +840,11 @@ struct RecoveryPathTests {
         // reason; if a retry succeeds first, state reverts cleanly with
         // no spurious callback.
         let manager = SpeechRecognitionManager()
+        // U6b: this loop can now leave a real, unawaited fast-retry Task
+        // scheduled (2-16s out) if the final iteration fails but stays
+        // under the budget -- harmless (weak self, local `manager`) but
+        // avoidable stray async work during the rest of the suite's run.
+        defer { manager.pendingFastRetryTask?.cancel() }
         let reflectionID = UUID()
         manager.reflectionID = reflectionID
         manager.recordingIntent = true
@@ -899,6 +904,267 @@ struct RecoveryPathTests {
         // exactly as a healthy recording should be.
         #expect(manager.recognitionContinuityGaps.isEmpty)
         #expect(manager.lifecycleState == .active)
+    }
+
+    // MARK: - Fast-backoff restart retry (U6b)
+    //
+    // Tests that need beginListeningSegment() to actually fail (1, 2, 3, 7,
+    // 8) follow this suite's existing precedent (see
+    // repeatedRetriesReachAnInternallyConsistentOutcome's comment): that
+    // call's real AVAudioSession/AVAudioEngine/SFSpeechRecognizer outcome is
+    // environment-dependent on this permission-less simulator, so each
+    // branches on whichever way it actually resolves rather than assuming
+    // failure. Tests that only need "a fast retry is currently pending" as
+    // a precondition (4, 5, 9) assign a dummy Task directly to the internal
+    // `pendingFastRetryTask` seam instead, sidestepping that
+    // indeterminacy entirely since they're testing cancellation, not
+    // scheduling.
+
+    @Test("A single attemptRecovery call either succeeds (no retry scheduled) or fails and schedules a fast retry under the budget")
+    func attemptRecoveryEitherSucceedsOrSchedulesFastRetry() {
+        let manager = SpeechRecognitionManager()
+        defer { manager.pendingFastRetryTask?.cancel() }
+        let reflectionID = UUID()
+        manager.reflectionID = reflectionID
+        manager.recordingIntent = true
+        manager.lifecycleState = .recovering
+        manager.interruptionInProgress = false
+        manager.lastRecognitionCallbackAt = Date()
+        manager.consecutiveRecoveryFailures = 0
+
+        manager.attemptRecovery(trigger: .watchdogStall, forReflection: reflectionID)
+
+        switch manager.lifecycleState {
+        case .active:
+            #expect(manager.consecutiveRecoveryFailures == 0)
+            #expect(manager.pendingFastRetryTask == nil)
+        case .recovering:
+            #expect(manager.consecutiveRecoveryFailures == 1)
+            #expect(manager.pendingFastRetryTask != nil)
+        default:
+            Issue.record("Unexpected lifecycleState \(manager.lifecycleState) after a single attempt")
+        }
+    }
+
+    @Test("A failed recovery attempt does not schedule a fast retry once the budget is exhausted")
+    func budgetExhaustionDoesNotScheduleFastRetry() {
+        let manager = SpeechRecognitionManager()
+        defer { manager.pendingFastRetryTask?.cancel() }
+        let reflectionID = UUID()
+        manager.reflectionID = reflectionID
+        manager.recordingIntent = true
+        manager.lifecycleState = .recovering
+        manager.interruptionInProgress = false
+        manager.lastRecognitionCallbackAt = Date()
+        manager.consecutiveRecoveryFailures = SpeechRecognitionManager.maxConsecutiveRecoveryFailures - 1
+
+        manager.attemptRecovery(trigger: .watchdogStall, forReflection: reflectionID)
+
+        switch manager.lifecycleState {
+        case .stopped:
+            #expect(manager.consecutiveRecoveryFailures == SpeechRecognitionManager.maxConsecutiveRecoveryFailures)
+            #expect(manager.pendingFastRetryTask == nil)
+        case .active:
+            #expect(manager.consecutiveRecoveryFailures == 0)
+            #expect(manager.pendingFastRetryTask == nil)
+        default:
+            Issue.record("Unexpected lifecycleState \(manager.lifecycleState) at the budget boundary")
+        }
+    }
+
+    @Test("A pending fast retry actually fires and attempts recovery again after its backoff delay")
+    func pendingFastRetryFiresAfterBackoffDelay() async throws {
+        let manager = SpeechRecognitionManager()
+        defer { manager.pendingFastRetryTask?.cancel() }
+        let reflectionID = UUID()
+        manager.reflectionID = reflectionID
+        manager.recordingIntent = true
+        manager.lifecycleState = .recovering
+        manager.interruptionInProgress = false
+        manager.lastRecognitionCallbackAt = Date()
+        manager.consecutiveRecoveryFailures = 0
+
+        manager.attemptRecovery(trigger: .watchdogStall, forReflection: reflectionID)
+
+        guard manager.lifecycleState == .recovering, manager.pendingFastRetryTask != nil else {
+            // beginListeningSegment() succeeded outright this run -- nothing
+            // was scheduled, nothing to await.
+            return
+        }
+        let failuresBeforeFiring = manager.consecutiveRecoveryFailures
+        #expect(failuresBeforeFiring == 1)
+
+        // Slightly longer than fastRetryBackoffSeconds[0] (2s) -- the real,
+        // un-mocked delay this chain actually schedules.
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+
+        // The pending retry fired on its own and attempted recovery again --
+        // observable regardless of whether THAT attempt also failed (counter
+        // advances) or happened to succeed (counter resets, state active).
+        switch manager.lifecycleState {
+        case .active:
+            #expect(manager.consecutiveRecoveryFailures == 0)
+        case .recovering:
+            #expect(manager.consecutiveRecoveryFailures == failuresBeforeFiring + 1)
+        default:
+            Issue.record("Unexpected lifecycleState \(manager.lifecycleState) after the fast retry should have fired")
+        }
+    }
+
+    @Test("Stop cancels a pending fast retry")
+    func stopCancelsPendingFastRetry() {
+        let manager = SpeechRecognitionManager()
+        manager.reflectionID = UUID()
+        manager.recordingIntent = true
+        manager.lifecycleState = .recovering
+
+        // A dummy stand-in for a retry an earlier failed attempt would have
+        // scheduled -- avoids depending on beginListeningSegment()'s
+        // environment-dependent outcome for a test that's only about
+        // cancellation.
+        let dummy = Task<Void, Never> {
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+        }
+        manager.pendingFastRetryTask = dummy
+
+        manager.stop()
+
+        #expect(dummy.isCancelled)
+        #expect(manager.pendingFastRetryTask == nil)
+    }
+
+    @Test("A different trigger winning the race cancels the pending fast retry before proceeding")
+    func racingTriggerCancelsPendingFastRetry() {
+        let manager = SpeechRecognitionManager()
+        defer { manager.pendingFastRetryTask?.cancel() }
+        let reflectionID = UUID()
+        manager.reflectionID = reflectionID
+        manager.recordingIntent = true
+        manager.lifecycleState = .recovering
+        manager.interruptionInProgress = false
+        manager.lastRecognitionCallbackAt = Date()
+
+        let dummy = Task<Void, Never> {
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+        }
+        manager.pendingFastRetryTask = dummy
+
+        // .interruptionEnded always proceeds (not gated by Mode A/B), so
+        // this deterministically reaches the cancellation point regardless
+        // of whether beginListeningSegment() itself then succeeds or fails.
+        manager.attemptRecovery(trigger: .interruptionEnded, forReflection: reflectionID)
+
+        #expect(dummy.isCancelled)
+    }
+
+    @Test("A fired fast retry carrying a stale reflectionID after a new reflection has started is a no-op")
+    func staleFastRetryReflectionIDIsIgnored() {
+        let manager = SpeechRecognitionManager()
+        let oldReflectionID = UUID()
+        manager.reflectionID = oldReflectionID
+        manager.recordingIntent = true
+        manager.lifecycleState = .active
+        manager.consecutiveRecoveryFailures = 0
+
+        let newReflectionID = UUID()
+        manager.reflectionID = newReflectionID
+
+        manager.attemptRecovery(trigger: .scheduledFastRetry, forReflection: oldReflectionID)
+
+        #expect(manager.lifecycleState == .active)
+        #expect(manager.reflectionID == newReflectionID)
+        #expect(manager.consecutiveRecoveryFailures == 0)
+    }
+
+    @Test("Backoff-spaced attempts stay under the rate guard's trip threshold")
+    func backoffSpacedAttemptsDoNotTripRateGuard() {
+        let manager = SpeechRecognitionManager()
+        defer { manager.pendingFastRetryTask?.cancel() }
+        let reflectionID = UUID()
+        manager.reflectionID = reflectionID
+        manager.recordingIntent = true
+        manager.lifecycleState = .recovering
+        manager.interruptionInProgress = false
+        manager.lastRecognitionCallbackAt = Date()
+        manager.consecutiveRecoveryFailures = 0
+
+        // The densest 10-second cluster the fast-retry schedule (plus one
+        // independent trigger) can produce, per PROPOSALS/U6b-proposal.md
+        // R1.1(b): three prior attempts already landed at these offsets,
+        // mirroring the schedule's own {0, 2, 6} cluster.
+        let now = Date()
+        manager.recentAutoRestarts = [now.addingTimeInterval(-6), now.addingTimeInterval(-4), now]
+
+        manager.attemptRecovery(trigger: .watchdogStall, forReflection: reflectionID)
+
+        // Must advance via the normal failure/success path, not the rate
+        // guard's branch (which also reaches .stopped, but by jumping
+        // straight there instead of incrementing the budget counter
+        // normally -- distinguished here by confirming the counter moved
+        // by exactly one rather than the attempt being rejected outright).
+        switch manager.lifecycleState {
+        case .active:
+            #expect(manager.consecutiveRecoveryFailures == 0)
+        case .recovering:
+            #expect(manager.consecutiveRecoveryFailures == 1)
+        default:
+            Issue.record("Rate guard tripped prematurely -- lifecycleState \(manager.lifecycleState), consecutiveRecoveryFailures \(manager.consecutiveRecoveryFailures)")
+        }
+    }
+
+    @Test("Once the backoff schedule's entries are used up, no further fast retry is scheduled but the reflection stays .recovering, not terminated")
+    func scheduleExhaustionDoesNotTerminateTheReflection() {
+        let manager = SpeechRecognitionManager()
+        defer { manager.pendingFastRetryTask?.cancel() }
+        let reflectionID = UUID()
+        manager.reflectionID = reflectionID
+        manager.recordingIntent = true
+        manager.lifecycleState = .recovering
+        manager.interruptionInProgress = false
+        manager.lastRecognitionCallbackAt = Date()
+        // The next failure's index (consecutiveRecoveryFailures) into
+        // fastRetryBackoffSeconds is exactly out of bounds.
+        manager.consecutiveRecoveryFailures = SpeechRecognitionManager.fastRetryBackoffSeconds.count
+
+        manager.attemptRecovery(trigger: .watchdogStall, forReflection: reflectionID)
+
+        switch manager.lifecycleState {
+        case .active:
+            #expect(manager.consecutiveRecoveryFailures == 0)
+        case .recovering:
+            #expect(manager.consecutiveRecoveryFailures == SpeechRecognitionManager.fastRetryBackoffSeconds.count + 1)
+            #expect(manager.pendingFastRetryTask == nil)
+        default:
+            Issue.record("Schedule exhaustion was confused with budget exhaustion -- lifecycleState \(manager.lifecycleState)")
+        }
+    }
+
+    @Test("A new interruption .began cancels a pending fast retry and blocks it from firing while in progress")
+    func interruptionBeganCancelsAndBlocksPendingFastRetry() {
+        let manager = SpeechRecognitionManager()
+        let reflectionID = UUID()
+        manager.reflectionID = reflectionID
+        manager.recordingIntent = true
+        manager.lifecycleState = .recovering
+        manager.interruptionInProgress = false
+
+        let dummy = Task<Void, Never> {
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+        }
+        manager.pendingFastRetryTask = dummy
+
+        manager.handleInterruption(type: .began, optionsValue: nil)
+
+        #expect(dummy.isCancelled)
+        #expect(manager.pendingFastRetryTask == nil)
+        #expect(manager.interruptionInProgress == true)
+
+        // Defense-in-depth (fix 2b): even if a stale fast-retry trigger
+        // fires anyway, it must no-op while interruptionInProgress is
+        // true, not burn another step of the budget.
+        manager.consecutiveRecoveryFailures = 0
+        manager.attemptRecovery(trigger: .scheduledFastRetry, forReflection: reflectionID)
+        #expect(manager.consecutiveRecoveryFailures == 0)
     }
 }
 

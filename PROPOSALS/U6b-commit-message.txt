@@ -1,0 +1,84 @@
+Add fast-backoff restart retry to shrink the post-interruption dead window (U6b)
+
+U6 left one item open: after a failed restart, recovery only retried on
+the next fixed 20-second watchdog tick, producing a ~36-46s dead window
+in both of U6's device runs during which real speech went uncaptured. A
+failed attemptRecovery() call now schedules its own bounded follow-up
+(2s/4s/8s/16s backoff, SpeechRecognitionManager.scheduleFastRetry /
+pendingFastRetryTask) instead of only waiting for the watchdog. Exactly
+one fast retry can be pending at a time; any attempt that actually
+proceeds -- a fresh fast retry, the watchdog, foreground reconciliation,
+or an interruption's .ended -- cancels whatever was previously pending
+first, so the fast-retry chain and the watchdog's independent cadence
+can never both execute for the same failure. Once the 4-entry backoff
+schedule is exhausted, scheduling silently stops and the watchdog's own
+cadence carries the rest of the budget.
+
+Fast retries count toward the same consecutive-failure budget as every
+other trigger -- no second counter. Because of that,
+maxConsecutiveRecoveryFailures was raised from 5 to 10: at 5, a
+continuously-failing restart would have exhausted the budget by the
+fast schedule's own ~30-second mark, ending a reflection sooner than
+U6's watchdog-only design ever would have (whose 5-strikes-at-20s
+budget gave ~100s, inside which U6's own passing device run actually
+recovered). 10 keeps the worst-case floor at or above that baseline
+while still letting the common case -- the interrupting app releasing
+the session within the first few seconds -- recover far sooner. This
+was a required fix from the director's review of the original proposal,
+based on the director's own timeline math, not a device-run finding.
+
+A fresh interruption beginning while a fast retry is pending must not
+let it fire into the OS still owning the microphone. Two layers close
+this: handleInterruption(.began) cancels any pending fast retry
+directly, and attemptRecovery() independently refuses a
+.scheduledFastRetry trigger while interruptionInProgress is true,
+covering the race between those two separately-scheduled async hops
+regardless of which lands first. This was the review's second required
+fix.
+
+Verified: 62/62 simulator-eligible unit tests pass (the project's 8
+pre-existing device-only AudioFixtureReplayTests diagnostics fail in a
+bare simulator host for an unrelated, pre-existing reason -- no granted
+Speech-recognition authorization), including nine new tests covering
+scheduling under budget, budget exhaustion, an actual end-to-end backoff
+firing, Stop/new-reflection/racing-trigger cancellation, the rate-guard
+margin at the schedule's densest cluster, schedule exhaustion not being
+confused with budget exhaustion, and the interruption-vs-pending-retry
+race. One live on-device smoke-test run (same scripted-phrase repro as
+U6's), Hermes-forensically verified against the device-container backup
+and console log: PASSED. The .ended restart failed again
+(NSOSStatusErrorDomain 561015905, the same error as U6); a 2-second fast
+retry fired and also failed; a 4-second retry was scheduled and then
+never fired because iOS suspended the backgrounded app, freezing the
+retry chain -- on the user's return, the watchdog fired immediately,
+visibly cancelled the stale pending retry (cancel-on-proceed verified
+live, not just in logic tests), and recovery succeeded. No rate-guard
+trip, no zombie state, consecutive-failure counter never moved past 2.
+The record stayed honest: captureCompleteness=.incomplete with the
+exact file endpoint, all three recognitionContinuityGaps timestamps
+inside the real outage window, audioRecordingReliable/
+missingAudioIntervals correctly unchanged, diarization skipped.
+
+Not fixed here, stated plainly rather than silently closed:
+- The real-world size of the improvement is bounded by iOS background
+  suspension -- fast retries cannot fire while the app is suspended, so
+  the practical gain on this run was an instant, cancel-on-proceed
+  recovery the moment the person returned to the foreground, not a
+  shortened in-background wait.
+- The device run's transcript surfaced a timestamp-ordering anomaly
+  (post-recovery words appear last in the transcript's text order but
+  carry mid-file audio timestamps) that is pre-existing -- the same
+  pattern is present in U6's own device-run data -- not a regression
+  introduced here. Logged as additional hard evidence for U5's existing
+  requirement to order a reconstructed transcript by audio offset
+  rather than arrival order; not touched in this unit.
+- Mode A (silent recognition-callback death while capture continues,
+  the original smoke-test incident's mechanism) remains
+  device-unverified, unchanged by this unit.
+- E8's recognizer-side result-replacement defect, U5's accumulation
+  prototype, and U3's diarization-aware-attribution work are unrelated
+  and remain open separately.
+
+See PLAN.md's U6b entry for the full device-run record and
+PROPOSALS/U6b-proposal.md (including Revision 1) for the backoff
+schedule's rate-guard and exhaustion-time math.

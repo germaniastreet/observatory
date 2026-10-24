@@ -617,8 +617,20 @@ final class SpeechRecognitionManager: ObservableObject {
     /// number of successful watchdog-triggered rollovers across a long
     /// quiet stretch without ever moving this off zero. Exhausting this
     /// budget is "fails for good," alongside the rate-window guard below.
+    ///
+    /// U6b note: fast retries (see `fastRetryBackoffSeconds`) count toward
+    /// this SAME budget -- no separate counter -- so raised from the
+    /// original U6 value of 5 to 10. At 5, a continuously-failing restart
+    /// would exhaust the budget by the fast-retry schedule's own ~30s mark,
+    /// terminating a reflection sooner than pre-U6b's watchdog-only design
+    /// ever would have (that design's 5-strikes-at-20s-apart budget gave
+    /// ~100s; the U6 passing device run recovered at +46s, inside that
+    /// window). 10 preserves at least that ~100s floor even in the
+    /// worst case (see PROPOSALS/U6b-proposal.md R1.1 for the full
+    /// timeline/math) while still letting most restarts recover far
+    /// sooner via the fast schedule.
     var consecutiveRecoveryFailures = 0
-    static let maxConsecutiveRecoveryFailures = 5
+    static let maxConsecutiveRecoveryFailures = 10
 
     /// Timestamps of recent recovery ATTEMPTS (successful or not) --
     /// unchanged from before U6. `isRestartLoopDetected()` below (also
@@ -663,6 +675,74 @@ final class SpeechRecognitionManager: ObservableObject {
     private var watchdogTimer: Timer?
     private static let watchdogInterval: TimeInterval = 20
     private static let recognitionStaleThreshold: TimeInterval = 25
+
+    /// U6b: bounded backoff delays tried after a failed recovery attempt,
+    /// before falling back to the watchdog's fixed `watchdogInterval`
+    /// cadence. Indexed by `consecutiveRecoveryFailures - 1` at schedule
+    /// time -- the 1st failure retries in 2s, the 2nd in 4s, etc. Only 4
+    /// entries on purpose: once `consecutiveRecoveryFailures` exceeds this
+    /// array's length, `scheduleFastRetry` silently stops scheduling and
+    /// the independent watchdog `Timer` becomes the sole remaining driver
+    /// for the rest of `maxConsecutiveRecoveryFailures`'s budget -- see
+    /// that property's doc comment and PROPOSALS/U6b-proposal.md R1.1 for
+    /// why this keeps worst-case exhaustion at or above the pre-U6b ~100s
+    /// baseline instead of regressing it. Internal rather than private so
+    /// tests can pre-seed `consecutiveRecoveryFailures` relative to its
+    /// length without a hardcoded literal.
+    static let fastRetryBackoffSeconds: [TimeInterval] = [2, 4, 8, 16]
+
+    /// At most one fast retry in flight at a time. Cancelled at the top of
+    /// every `attemptRecovery` call that actually proceeds -- a fresh fast
+    /// retry, the watchdog, foreground reconciliation, or an
+    /// interruption's `.ended` all supersede whatever was previously
+    /// pending, so the fast-retry chain and the watchdog's independent
+    /// cadence can never both execute for the same failure -- by
+    /// `handleInterruption(.began)` (a fresh interruption must not let a
+    /// stale retry fire into it), by `stop()`, and by `finishWithFailure(_:)`.
+    /// Internal rather than private, matching this file's existing
+    /// testability-seam precedent.
+    var pendingFastRetryTask: Task<Void, Never>?
+
+    /// Cancels and clears any in-flight fast retry. Safe to call when
+    /// nothing is pending (no-op). See `pendingFastRetryTask`'s doc
+    /// comment for every call site and why each needs it.
+    private func cancelPendingFastRetry() {
+        guard let task = pendingFastRetryTask else { return }
+        task.cancel()
+        pendingFastRetryTask = nil
+        print("[u6-recovery] fast retry cancelled")
+    }
+
+    /// Schedules the next fast retry per `fastRetryBackoffSeconds`, indexed
+    /// by the CURRENT `consecutiveRecoveryFailures` (already incremented by
+    /// the caller for this failure). Silently does nothing once that index
+    /// runs past the schedule's length -- see `fastRetryBackoffSeconds`'s
+    /// doc comment for why that's correct, not a bug. The explicit `catch`
+    /// plus the post-sleep `Task.isCancelled` recheck both exist to close
+    /// the one-tick race where `cancelPendingFastRetry()` lands in the gap
+    /// between the sleep returning and the next line running -- everything
+    /// here is still MainActor-serialized (no concurrent mutation is
+    /// actually possible), this only resolves strict ordering.
+    private func scheduleFastRetry(forReflection triggerReflectionID: UUID) {
+        let index = consecutiveRecoveryFailures - 1
+        guard index >= 0, index < Self.fastRetryBackoffSeconds.count else { return }
+        let delay = Self.fastRetryBackoffSeconds[index]
+        print("[u6-recovery] fast retry scheduled delay=\(delay)s attempt=\(consecutiveRecoveryFailures) reflectionID=\(triggerReflectionID)")
+        pendingFastRetryTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            } catch {
+                print("[u6-recovery] fast retry cancelled before firing reflectionID=\(triggerReflectionID)")
+                return
+            }
+            guard !Task.isCancelled, let self else {
+                print("[u6-recovery] fast retry cancelled before firing reflectionID=\(triggerReflectionID)")
+                return
+            }
+            print("[u6-recovery] fast retry firing reflectionID=\(triggerReflectionID)")
+            self.attemptRecovery(trigger: .scheduledFastRetry, forReflection: triggerReflectionID)
+        }
+    }
 
     init() {
         interruptionObserver = NotificationCenter.default.addObserver(
@@ -761,6 +841,7 @@ final class SpeechRecognitionManager: ObservableObject {
         pendingAudioFileURL = Self.audioFileURL(named: audioFileName)
         recentAutoRestarts = []
         consecutiveRecoveryFailures = 0
+        cancelPendingFastRetry()
         recognitionContinuityGaps = []
         hadCaptureOutage = false
         lastRecognitionCallbackAt = nil
@@ -1056,6 +1137,10 @@ final class SpeechRecognitionManager: ObservableObject {
         case watchdogStall
         case interruptionEnded
         case foregroundReconciliation
+        /// U6b: a bounded, self-scheduled follow-up to a failed recovery
+        /// attempt, firing sooner than the watchdog's fixed cadence would.
+        /// See `scheduleFastRetry`/`fastRetryBackoffSeconds`.
+        case scheduledFastRetry
     }
 
     /// The single owner of every attempt to (re)start listening after
@@ -1073,6 +1158,20 @@ final class SpeechRecognitionManager: ObservableObject {
         // new reflectionID) is a safe no-op, not a chance to revive or
         // corrupt the wrong session.
         guard recordingIntent, reflectionID == triggerReflectionID, lifecycleState != .stopped else { return }
+
+        // U6b defense-in-depth: handleInterruption(.began) already cancels
+        // any pending fast retry directly, but that cancellation and this
+        // retry's own firing are two independently-scheduled async hops
+        // onto this MainActor with no guaranteed relative order -- this
+        // closes the race without depending on which one lands first. A
+        // fresh interruption means the OS owns the microphone; firing into
+        // it would fail deterministically and burn a budget step for
+        // nothing, something shipped U6's other triggers never do (see
+        // PROPOSALS/U6b-proposal.md R1.2).
+        if trigger == .scheduledFastRetry, interruptionInProgress {
+            print("[u6-recovery] fast retry no-op, interruption in progress")
+            return
+        }
 
         if trigger == .foregroundReconciliation || trigger == .watchdogStall {
             // Per ChatGPT's review: foreground activation requests
@@ -1111,6 +1210,15 @@ final class SpeechRecognitionManager: ObservableObject {
             guard isRecognitionStale() || modeBStuckAfterFailedRestart else { return }
         }
 
+        // This attempt is proceeding -- whatever fast retry was previously
+        // pending (from an earlier failure in this same chain) is now
+        // superseded, whether this attempt succeeds or fails. See
+        // `pendingFastRetryTask`'s doc comment: this single cancellation
+        // point is what keeps the fast-retry chain and the watchdog's
+        // independent cadence from ever both executing for the same
+        // failure.
+        cancelPendingFastRetry()
+
         // Moved here (after the gate, not unconditionally at entry) so a
         // watchdog/foreground trigger that's correctly gated out during
         // healthy operation doesn't spam the console every watchdogInterval
@@ -1144,9 +1252,14 @@ final class SpeechRecognitionManager: ObservableObject {
             consecutiveRecoveryFailures += 1
             if consecutiveRecoveryFailures >= Self.maxConsecutiveRecoveryFailures {
                 finishWithFailure(.recoveryExhausted)
+            } else {
+                // U6b: don't just wait for the watchdog's next fixed-20s
+                // tick -- schedule a sooner, bounded retry. Stays a no-op
+                // once `fastRetryBackoffSeconds` is exhausted (see its doc
+                // comment); the watchdog's own independent cadence picks
+                // up the remaining budget from there.
+                scheduleFastRetry(forReflection: triggerReflectionID)
             }
-            // Otherwise stays `.recovering` -- the next trigger (the
-            // watchdog, most likely) tries again.
         }
     }
 
@@ -1221,6 +1334,7 @@ final class SpeechRecognitionManager: ObservableObject {
         interruptionInProgress = false
         watchdogTimer?.invalidate()
         watchdogTimer = nil
+        cancelPendingFastRetry()
 
         if audioEngine.isRunning {
             audioEngine.stop()
@@ -1257,7 +1371,12 @@ final class SpeechRecognitionManager: ObservableObject {
         }
     }
 
-    private func handleInterruption(type: AVAudioSession.InterruptionType, optionsValue: UInt?) {
+    // Internal rather than private (see the interruptionInProgress/
+    // lifecycleState block's doc comment above), so tests can drive a
+    // simulated `.began`/`.ended` directly -- needed for U6b's
+    // interruption-vs-pending-fast-retry test, which otherwise has no way
+    // to exercise this method at all on this permission-less simulator.
+    func handleInterruption(type: AVAudioSession.InterruptionType, optionsValue: UInt?) {
         switch type {
         case .began:
             let guardPassed = (lifecycleState == .active || lifecycleState == .recovering)
@@ -1269,6 +1388,14 @@ final class SpeechRecognitionManager: ObservableObject {
             // false during this reflection, even if this interruption
             // resolves cleanly.
             hadCaptureOutage = true
+            // U6b: a fresh interruption must not let an already-scheduled
+            // fast retry fire into it (the OS owns the microphone; it
+            // would fail deterministically and burn a budget step for
+            // nothing). `attemptRecovery` also independently refuses a
+            // `.scheduledFastRetry` trigger while this is true (see its
+            // doc comment) -- this call is the primary path, that's the
+            // race-proof backstop.
+            cancelPendingFastRetry()
             currentGenerationState = .sealed
             sealCurrentSegment()
 
@@ -1317,6 +1444,7 @@ final class SpeechRecognitionManager: ObservableObject {
         currentGenerationState = .sealed
         watchdogTimer?.invalidate()
         watchdogTimer = nil
+        cancelPendingFastRetry()
 
         if audioEngine.isRunning {
             audioEngine.stop()
