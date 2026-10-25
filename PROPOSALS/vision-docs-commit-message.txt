@@ -1,0 +1,7 @@
+Add VISION.md (owner-accepted v0.2), diarization-history addendum; update PLAN.md
+
+- VISION.md: the long-range two-track trajectory codified from the owner's articulation -- one measurement engine, wrapped in two products (Track I self-focus personal app; Track II embeddable third-party-focus engine). Status v0.2, owner-accepted 2026-10-24; independent ChatGPT review of its section 3 flags (deception-claim posture; Track II consent inversion) still pending. Until then PROJECT_CONSTRAINTS.md remains the binding rulebook and PLAN.md the source of truth; nothing here re-orders the unit queue.
+- ISSUE_HISTORIES.md: director's verified addendum to the diarization history (git forensics, 2026-10-24): diarization has NEVER passed ground-truth validation in this project's history; the July "fixes" (7ffde91, c05374c) only suppressed v0.1's false-positive over-labeling; the engine was authored without a compiler; ROADMAP.md 2026-07-28 already recorded under-detection of real speakers. U3/U4 scoping must not assume diarization quality it hasn't measured.
+- PLAN.md: one-liner now references VISION.md; open issue 2 carries the verified diarization history; U4a-1 entry records the director split (U4a-1 Channel A / U4a-2 Channel B), rulings D1-D3, the implemented + director-verified status (artifact checks against xcresult bundles 17-42-13/17-45-30), and the 360-to-648 abstention-count correction.
+
+Docs only; no code changes.

@@ -80,6 +80,17 @@ Multiple possible causes (not isolated yet):
 
 ---
 
+### Director's verified addendum (2026-10-24, Hermes — git forensics, supersedes nothing above; confirms it)
+Verified against commits and diffs, prompted by the owner asking whether early diarization was ever actually good (it was not):
+- **v0.1's label-rich output was false positives, not skill.** Any noise blip flipped a solo transcript to Speaker A/B/C — the era that *looked* "very, very good" to the owner was the most broken version.
+- **The July "fixes" curbed over-labeling; they never improved or tested detection.** `7ffde91` (engine v0.2) added the ≥2-distinct-speakers guard; `c05374c` (engine v0.3) added the 2.0s `minimumSpeakerDuration` threshold — justified in code comments by reasoning ("a real second participant speaks meaningfully longer than a couple of seconds"), not measurement.
+- **The engine was authored blind:** `7ffde91` carries the in-file comment "this is the one file in WayReally built against a third-party package's exact API **without a compiler available here to verify it**."
+- **Contemporaneous docs already said detection was failing the other way:** ROADMAP.md as committed `a54ea45` (2026-07-28): "detects far fewer distinct speakers than are actually present… hasn't yet been verified against real recordings with multiple people."
+- **As of 2026-10-24, diarization has never passed a ground-truth validation in this project's history.** The only verified multi-speaker result is October's fixture work (server-path recognition found 2 speakers in both multi fixtures).
+- **Handoff lesson (owner-relevant):** the July Claude handoff summary (`~/Desktop/wayreally-summary-for-nous-hermes.md`) listed "Diarization bug — fixed" with no caveat, while the honest record sat in this file and ROADMAP.md. Summaries flatter; artifacts don't — verify claims against git/artifacts, per D-13.
+
+---
+
 ## 2. BIOMETRICS (Apple Watch/HealthKit) 🟡 DEFERRED
 
 ### Issue Summary
