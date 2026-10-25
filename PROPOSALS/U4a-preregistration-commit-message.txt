@@ -1,0 +1,8 @@
+Pre-register U4a proposal Revision 2 with its ChatGPT review record
+
+- PROPOSALS/U4a-proposal.md (Revision 2): acoustic-expression observation prototype, transcript-independent. R1 reviewed by ChatGPT (APPROVE WITH CHANGES); R2 incorporates every review point — four-state frame classification replacing the voicing/pause conflation, splice-evidence corrections and the disagreement decision table, versioned estimator configuration as data, Channel B rebuilt on result-level speechRecognitionMetadata with a pre-registered alignment experiment and per-feature coverage definition, restructured M1-M5 outcomes (abstention and unmeasurable are passing results), schema invariants (finite values, explicit nulls, legitimate zeros, leak-scanned strings). Director-verified point-by-point against the review 2026-10-24, including independent code verification of the recordLoss/missingAudioIntervals join semantics (SpeechRecognitionManager.swift:432-444).
+- PROPOSALS/U4a-chatgpt-review-brief.md: the self-contained review brief (with director's artifact-verification notes: SpeechDetector absent from the installed SDK - Q6 void; deprecated segment-level voiceAnalytics path) and ChatGPT's complete reply, pasted back per the relay protocol.
+
+Per proposal section 13 D3, this commit is the pre-registration point: the bands, targets, thresholds, and estimator configuration in Revision 2 are frozen before any test run; later changes are documented amendments with reasons, never silent edits. Unit split per director ruling D1: U4a-1 (Channel A, simulator, M1-M4) proceeds now; U4a-2 (Channel B, device, M5) follows in its own thread.
+
+Docs only; no code changes.
