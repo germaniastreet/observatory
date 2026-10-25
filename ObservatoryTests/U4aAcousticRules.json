@@ -1,0 +1,126 @@
+{
+  "id": "observatory.voice.acoustic.prototype",
+  "name": "Acoustic expression (U4a prototype)",
+  "version": "0.1.0",
+  "domain": "Voice",
+  "authorType": "Observatory",
+  "calibrationStatus": "uncalibrated-prototype",
+  "measurementParameters": {
+    "_amendment": "A2",
+    "_amendmentReason": "Proposal Revision 2 section 7 assigns the minimum observable pause and the resume debounce to rule data, but the sketched SignalLibrary rule shape has no slot for parameters that are not comparison thresholds. A sibling measurementParameters block keeps them in rule data as section 7 requires while staying importable through SignalLibraryRegistry.importJSON. Boundary resolution: the activity gate (onset/offset dB above the estimated floor) lives in the estimator configuration, where section 4.4 names it explicitly; only the pause-DEFINITION parameters live here. Values carried over unchanged from SilenceTracker (SpeechRecognitionManager.swift:223/234).",
+    "minimumGapSeconds": 1.5,
+    "resumeDebounceSeconds": 0.3
+  },
+  "rules": [
+    {
+      "id": "u4a.intensityShift.rise",
+      "name": "Intensity rise vs within-span baseline",
+      "matchType": "numericThreshold",
+      "eventKind": "intensityShift",
+      "eventCategory": "Voice",
+      "confidence": "low",
+      "numeric": {
+        "metric": "level.windowMedian.deltaFromSpanBaseline",
+        "unit": "dB",
+        "comparison": "greaterThanOrEqual",
+        "threshold": 6.0,
+        "gates": {
+          "minDomainFraction": 0.9,
+          "minEligibleSeconds": 1.5,
+          "minEstimationSuccess": 0.7,
+          "minBaselineVoicedSeconds": 20.0,
+          "requireNoFlags": ["clippingPresent"]
+        },
+        "rationale": "6 dB is approximately a doubling of amplitude; a deliberately large, round, UNCALIBRATED default - not validated against perception or any reference annotation."
+      }
+    },
+    {
+      "id": "u4a.intensityShift.fall",
+      "name": "Intensity fall vs within-span baseline",
+      "matchType": "numericThreshold",
+      "eventKind": "intensityShift",
+      "eventCategory": "Voice",
+      "confidence": "low",
+      "numeric": {
+        "metric": "level.windowMedian.deltaFromSpanBaseline",
+        "unit": "dB",
+        "comparison": "lessThanOrEqual",
+        "threshold": -6.0,
+        "gates": {
+          "minDomainFraction": 0.9,
+          "minEligibleSeconds": 1.5,
+          "minEstimationSuccess": 0.7,
+          "minBaselineVoicedSeconds": 20.0,
+          "requireNoFlags": ["clippingPresent"]
+        },
+        "rationale": "Mirror of the rise rule at the same uncalibrated magnitude."
+      }
+    },
+    {
+      "id": "u4a.pitchContourShift.rise",
+      "name": "Window median F0 above the span baseline",
+      "matchType": "numericThreshold",
+      "eventKind": "pitchContourShift",
+      "eventCategory": "Voice",
+      "confidence": "low",
+      "numeric": {
+        "metric": "f0.windowMedian.deltaFromSpanBaseline",
+        "unit": "semitones",
+        "comparison": "greaterThanOrEqual",
+        "threshold": 4.0,
+        "gates": {
+          "minDomainFraction": 0.9,
+          "minEligibleSeconds": 1.0,
+          "minEstimationSuccess": 0.6,
+          "minBaselineVoicedSeconds": 20.0,
+          "requireNoFlags": ["searchRangeRailHits"]
+        },
+        "rationale": "4 semitones is a third - audible as a clear pitch change, chosen as a round uncalibrated default. No perceptual or clinical validation exists for this value."
+      }
+    },
+    {
+      "id": "u4a.pitchContourShift.fall",
+      "name": "Window median F0 below the span baseline",
+      "matchType": "numericThreshold",
+      "eventKind": "pitchContourShift",
+      "eventCategory": "Voice",
+      "confidence": "low",
+      "numeric": {
+        "metric": "f0.windowMedian.deltaFromSpanBaseline",
+        "unit": "semitones",
+        "comparison": "lessThanOrEqual",
+        "threshold": -4.0,
+        "gates": {
+          "minDomainFraction": 0.9,
+          "minEligibleSeconds": 1.0,
+          "minEstimationSuccess": 0.6,
+          "minBaselineVoicedSeconds": 20.0,
+          "requireNoFlags": ["searchRangeRailHits"]
+        },
+        "rationale": "Mirror of the rise rule at the same uncalibrated magnitude."
+      }
+    },
+    {
+      "id": "u4a.acceleratedDelivery.candidate",
+      "name": "Estimated syllable rate above the span baseline",
+      "matchType": "numericThreshold",
+      "eventKind": "acceleratedDeliveryCandidate",
+      "eventCategory": "Voice",
+      "confidence": "low",
+      "numeric": {
+        "metric": "nuclei.windowRatePerActiveSecond.deltaFromSpanBaseline",
+        "unit": "nucleiPerSecond",
+        "comparison": "greaterThanOrEqual",
+        "threshold": 1.5,
+        "gates": {
+          "minDomainFraction": 0.9,
+          "minEligibleSeconds": 2.0,
+          "minEstimationSuccess": 0.7,
+          "minBaselineVoicedSeconds": 20.0,
+          "requireNoFlags": []
+        },
+        "rationale": "1.5 detected nuclei per active second above the speaker's own span baseline. An uncalibrated default over an estimated, reference-unscored nucleus rate - not a validated speaking-rate threshold."
+      }
+    }
+  ]
+}

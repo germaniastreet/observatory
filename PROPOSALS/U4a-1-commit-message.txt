@@ -1,0 +1,79 @@
+Add the transcript-independent acoustic measurement prototype (U4a-1, Channel A)
+
+First acoustic measurements in this project computed directly on saved
+recordings with no recognizer involved: signal processing on the .caf via
+AVAudioFile + Accelerate. Test-only -- 11 new files under ObservatoryTests/
+(2 more than the proposal listed: window aggregation and test support got
+their own files), no production-target file touched. Scope set by a ChatGPT review (APPROVE
+WITH CHANGES) and the director's split of U4a into U4a-1 (Channel A,
+simulator, M1-M4) and U4a-2 (Channel B / SFVoiceAnalytics, device, M5, not
+started). Proposal Revision 2 at PROPOSALS/U4a-proposal.md is the spec.
+
+Measurement layer: four-state frame classification keeping speech activity,
+periodic voicing, pause candidates and unknown regions separate (unvoiced
+speech is not a pause); NCCF F0 in Hz with sub-harmonic preference,
+out-of-range peaks reported as out-of-range rather than unvoiced, and
+octave-jump rejection that nils a frame instead of substituting a value;
+dBFS level; span-scoped percentile noise floor; a floor-relative level
+proxy explicitly not called SNR; detected-nucleus rates explicitly not
+called syllables per second. Metric-specific coverage (domain, eligible,
+estimation success, absolute seconds) and a validity record with one
+primary reason plus non-exclusive quality flags. Thresholds are
+SignalLibrary-shaped rule data; estimator parameters are a separate
+versioned, SHA-256-hashed configuration recorded inline in every report --
+neither is a Swift constant (D-16).
+
+Simulator: 85 tests, 77 passed, 8 failed. All 15 new tests pass; the 8
+failures are the pre-existing speech-permission replay failures, unchanged.
+
+M1 estimator checks: F0 error <= 0.001% at 100/150/220/300 Hz and at both
+60/400 Hz bounds; missing-fundamental and abrupt-pitch-change cases exact;
+level error 0.001 dB; nucleus counts exact; activity boundaries within
+5 ms of truth; a level-matched noise burst gives 0 voiced frames of 90;
+floor error -0.14 dB. F0 abstains entirely at 5 dB SNR -- reported, not
+hidden. M4 invariance: F0 identical to 0.000% across base/identity/gain
+variants; measured level change exactly +12.00/+15.20/+18.70 dB against
+E10b's applied gains.
+
+M2 behavioural milestone -- real measurements from real recordings, with
+the artifact as the evidence: U4aMeasurementReport.json (10.3 MB) attached
+to the run and exported from the xcresult; 5 real sources, 6,926 window
+measurements, 1,340 explicit nulls, 5,586 valid, 1 real rule-fired
+observation on fixture-solo (-6.42 dB against an uncalibrated -6.0 dB
+threshold). All three fixtures and the U6b session reached the
+full-demonstration outcome with every pre-registered band in band. The
+U6b incomplete session is analysed coverage-scoped per D-18 (95.9 s of
+149.4 s, 7 spans), its lifecycle join bound reported as the interval
+[13.40, 32.40] s -- not a single point -- and kept separate from the
+signal candidates. A pre-D-17 session with no captureCompleteness field
+abstained from all 648 join-sensitive window measurements (every null =
+insideUnresolvedRegion) while still reporting 432 frame-local values
+(6 metrics over 72 windows).
+
+M3 abstention: zero observations from digital silence, -50 dBFS noise and
+the real 4096-byte orphaned recording (no crash); a detectable join bounded
+to 4.01-5.99 s against 4.0-6.0 s truth and split into two usable spans; a
+seamless join correctly detected by nothing; schema scan clean; canonical
+payload byte-identical across runs in this pinned environment.
+
+Three defects found by these checks and fixed before any green run: NCCF
+sub-harmonic selection (300 Hz read as 100 Hz), inconsistent rate
+denominators producing an impossible estimation-success of 201.0, and the
+domain builder deleting a whole span for an unbounded join where the spec
+keeps frame-local measurements. Four pre-registration amendments (A1-A4)
+are documented with their reasons inside the JSON files they affect.
+
+No pbxproj edit was needed -- the test target is a
+fileSystemSynchronizedGroup, so the approved Q5a edit turned out
+unnecessary. The only file outside ObservatoryTests/ is
+Observatory.xctestplan, which sets OBSERVATORY_U4A_SESSION_BACKUP_DIR so
+the real-session tests actually execute per director ruling (c).
+
+Not claimed: nothing is perceptually, emotionally or clinically validated;
+no interpretation, emotion label, probability or severity is produced. M1
+and M4 establish synthetic accuracy and gain invariance only. The fixtures'
+estimated floor sits at -84 to -87 dBFS because they contain
+near-digital-silence stretches, so every real-source measurement carries
+noiseFloorUnverifiedOnRealAudio. Nucleus rates are reference-unscored.
+Channel B, speaker attribution, production integration and Stage 2 remain
+untouched.

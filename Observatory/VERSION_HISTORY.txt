@@ -918,3 +918,104 @@ death while capture continues, the ORIGINAL smoke-test incident's
 mechanism) remains device-unverified; E8's recognizer-replacement
 defect and U5's accumulation prototype are still open; U3's diarization-
 aware-attribution work is still open.
+
+================================================================================
+U4a-1 -- Acoustic-expression observation prototype, Channel A (test-only)
+2026-10-24
+================================================================================
+
+The first transcript-independent acoustic measurements in this project,
+computed directly on saved .caf recordings via AVAudioFile + Accelerate
+with no recognizer involved at any point. Test-only: 11 new files under ObservatoryTests/
+(2 more than the proposal listed: window aggregation and test support got
+their own files), no production-target file touched. No pbxproj edit was
+needed (the test target is a fileSystemSynchronizedGroup, so the approved
+Q5a edit turned out unnecessary); the only file touched outside
+ObservatoryTests/ is Observatory.xctestplan, which sets
+OBSERVATORY_U4A_SESSION_BACKUP_DIR so the real-session tests actually run.
+
+Scope was set by a ChatGPT review (APPROVE WITH CHANGES) and the
+director's split of U4a into U4a-1 (Channel A, simulator, milestones
+M1-M4) and U4a-2 (Channel B / SFVoiceAnalytics, device, M5 -- not started).
+SFVoiceAnalytics is reachable only through recognition results, so it
+cannot satisfy transcript-independence; whether its frame arrays can be
+anchored to file time at all is an open question U4a-2 will answer, and
+no claim is made here about how much audio it covers.
+
+What the measurement layer does: a four-state frame classification that
+keeps speech activity, periodic voicing, pause candidates and unknown
+regions separate (unvoiced speech is not a pause -- conflating them, as
+the original design did, corrupted the pause, phonation and articulation-
+rate definitions); NCCF fundamental frequency in Hz with sub-harmonic
+preference, out-of-range peaks reported as out-of-range rather than as
+unvoiced, and octave-jump rejection that nils a frame instead of
+substituting a value; dBFS level; a span-scoped percentile noise floor; a
+floor-relative level proxy that is explicitly NOT called SNR; detected-
+nucleus events and rates that are explicitly NOT called syllables per
+second. Window aggregation carries metric-specific coverage (domain,
+eligible, estimation-success, absolute seconds) and a validity record with
+one primary reason plus non-exclusive quality flags. Thresholds are
+SignalLibrary-shaped rule data; estimator parameters are a separate
+versioned, SHA-256-hashed configuration recorded inline in every report.
+Neither is a Swift constant (D-16).
+
+Simulator evidence: 85 tests, 77 passed, 8 failed -- all 15 new tests pass;
+the 8 failures are the pre-existing speech-permission replay failures,
+unchanged. M1 (estimator checks against known answers): F0 error <= 0.001%
+at 100/150/220/300 Hz and at both 60/400 Hz search bounds; missing-
+fundamental and abrupt-150-to-300 Hz cases exact; level error 0.001 dB;
+nucleus counts exact (5/5, 10/10); activity boundaries 0.995/2.005 s
+against truth 1.000/2.000; a level-matched noise burst yields 0 voiced
+frames of 90, confirming activity and voicing are not conflated; floor
+error -0.14 dB. F0 abstains entirely at 5 dB SNR (0 eligible frames) --
+reported, not hidden. M4 (invariance on existing assets): F0 identical to
+0.000% across base/identity/gain variants of all three fixtures, and
+measured level change exactly +12.00/+15.20/+18.70 dB against the applied
+gains recorded in E10b.
+
+M2, the behavioural milestone -- real measurements from real recordings,
+with the artifact as evidence: U4aMeasurementReport.json, 10.3 MB, attached
+to the test run and exported from the xcresult bundle; 5 real sources,
+6,926 window measurements, 1,340 explicit nulls, 5,586 valid, and 1 real
+rule-fired observation (fixture-solo, intensity fall, -6.42 dB against an
+uncalibrated -6.0 dB threshold). All three fixtures and the U6b session
+reached the full-demonstration outcome with every pre-registered
+plausibility band in band. The U6b incomplete session was analysed
+coverage-scoped per D-18: 95.9 s analyzable of 149.4 s captured across 7
+spans, with the lifecycle-derived join bound reported as the INTERVAL
+[13.40, 32.40] s -- not the single 32.4 s point the first draft claimed,
+which the review correctly identified as algebra rather than corroboration
+-- kept separate from 7 near-silence and 2 noise-floor-step signal
+candidates. A pre-D-17 session with no captureCompleteness field decoded
+as unknown-legacy and abstained from all 360 join-sensitive measurements
+while still reporting 72 frame-local level values.
+
+M3 (abstention and schema): zero observations from digital silence, from
+-50 dBFS white noise, and from the real 4096-byte header-only orphaned
+recording (handled, no crash); a detectable join bounded to 4.01-5.99 s
+against a 4.0-6.0 s truth and split into two usable spans; a seamless join
+correctly detected by nothing at all, which is why waveform inspection
+cannot replace lifecycle evidence; schema scan clean (0 violations, 49
+explicit nulls, 84 legitimate zeros); byte-identical canonical payload
+across runs within this pinned environment.
+
+Three defects were found by these checks and fixed before any green run:
+NCCF sub-harmonic selection (a 300 Hz signal read as 100 Hz and a 400 Hz
+signal as 100 Hz); inconsistent rate denominators producing an impossible
+estimation-success value of 201.0; and the analysis-domain builder
+deleting an entire span when a join's location was unbounded, where the
+specification says frame-local measurements survive. Four pre-registration
+amendments (A1-A4) are documented with their reasons inside the JSON files
+they affect.
+
+Explicitly not claimed: nothing here is perceptually, emotionally or
+clinically validated, and no interpretation, emotion label, probability or
+severity is produced anywhere. M1 and M4 establish synthetic accuracy and
+gain invariance only. The three fixtures' estimated noise floor sits at
+-84 to -87 dBFS because they contain near-digital-silence stretches, so
+the floor-relative proxy is relative to that rather than to room tone;
+every real-source measurement carries a noiseFloorUnverifiedOnRealAudio
+flag, because real audio offers no independent floor measurement to check
+it against. Nucleus rates are reference-unscored estimates. Channel B,
+speaker attribution, production integration and all of Stage 2 remain
+untouched.

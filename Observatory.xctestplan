@@ -10,6 +10,12 @@
   ],
   "defaultOptions" : {
     "codeCoverage" : false,
+    "environmentVariableEntries" : [
+      {
+        "key" : "OBSERVATORY_U4A_SESSION_BACKUP_DIR",
+        "value" : "$(HOME)\/Developer\/Observatory-device-backups"
+      }
+    ],
     "performanceAntipatternCheckerEnabled" : true,
     "targetForVariableExpansion" : {
       "containerPath" : "container:Observatory.xcodeproj",

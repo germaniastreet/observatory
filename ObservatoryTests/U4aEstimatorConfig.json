@@ -1,0 +1,66 @@
+{
+  "configID": "u4a.estimator.default",
+  "configVersion": "0.1.0",
+  "frameGeometry": {
+    "hopMs": 10,
+    "levelFrameMs": 25,
+    "pitchFrameMs": 40,
+    "_pitchAnalysisRateNote": "Not named in the frozen section 4.4 block; specified here at implementation time, before any run. 24000 Hz is an exact integer decimation of the 48 kHz sources (factor 2) and keeps the lag quantisation at the 400 Hz end of the search range near 0.8 percent, which the 1 percent M1 target requires.",
+    "pitchAnalysisRateHz": 24000
+  },
+  "noiseFloor": {
+    "method": "percentile",
+    "percentile": 10,
+    "minSpanSecondsForFloor": 3.0
+  },
+  "activity": {
+    "onsetAboveFloorDb": 8.0,
+    "offsetAboveFloorDb": 5.0,
+    "minActiveRunMs": 50,
+    "minInactiveRunMs": 100
+  },
+  "periodicity": {
+    "searchMinHz": 60,
+    "searchMaxHz": 400,
+    "peakStrengthFloor": 0.45,
+    "_subharmonicPreferenceAmendment": "A4",
+    "_subharmonicPreferenceReason": "Added after M1's first run produced measured evidence of sub-harmonic selection: a 300 Hz harmonic stack was estimated at 100 Hz (3x the true period) and a 400 Hz stack at 100 Hz (4x), because a perfectly periodic signal has near-equal normalised correlation peaks at every integer multiple of its period and the longest lag won marginally. The estimator now prefers the SMALLEST lag whose peak reaches this fraction of the global maximum. This ratio determines which voices become measurable, so per review point R2.1 it is configuration data rather than a constant buried in code.",
+    "subharmonicPreference": 0.9,
+    "diagnosticWidenedRange": {
+      "minHz": 40,
+      "maxHz": 600,
+      "enabled": true
+    }
+  },
+  "f0Smoothing": {
+    "medianWidthFrames": 3,
+    "maxOctaveJumpSemitonesPerFrame": 9.0
+  },
+  "nuclei": {
+    "bandLowHz": 70,
+    "bandHighHz": 4000,
+    "dipDb": 2.0,
+    "minInterNucleusMs": 100,
+    "filterSettlingMs": 30,
+    "requirePeriodicFrame": true
+  },
+  "joins": {
+    "guardSeconds": 1.0
+  },
+  "windows": {
+    "windowSeconds": 5.0,
+    "hopSeconds": 1.0,
+    "minimumUsableWindowSeconds": 2.0
+  },
+  "joinEvidence": {
+    "_amendment": "A1",
+    "_amendmentReason": "Proposal Revision 2 section 6.3 requires signal-candidate join detection, but the frozen section 4.4 configuration omitted its parameters. Values are taken from Hermes's measured energy forensics on these very recordings: OS mic-mute spans at -87 to -90 dBFS versus speech at -42 to -56 dBFS. Added at implementation time as a documented amendment per section 13 D3, never as a silent edit.",
+    "nearDigitalSilenceDbfs": -75.0,
+    "minNearSilenceRunSeconds": 1.0,
+    "noiseFloorStepDb": 10.0,
+    "noiseFloorStepBlockSeconds": 5.0
+  },
+  "baseline": {
+    "minimumBaselineVoicedSeconds": 20.0
+  }
+}
