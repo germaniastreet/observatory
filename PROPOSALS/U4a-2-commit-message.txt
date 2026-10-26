@@ -1,0 +1,40 @@
+Pre-register U4a-2 (Channel B) plan, director ruling, and frozen config
+
+This is the pre-implementation pre-registration commit for U4a-2
+(Channel B: SFVoiceAnalytics alignment ladder + coverage, milestone M5 of
+PROPOSALS/U4a-proposal.md Revision 2, sections 8 and 9 M5, pre-registered
+at 5d83779). No code is implemented and no device run has happened. It
+records the plan and freezes its parameters before any device action, per
+director ruling D3.
+
+Contents:
+- PROPOSALS/U4a-2-plan.md: the U4a-2 working plan (pre-implementation
+  SDK findings, proposed amendments A5-A9, file list, device session plan
+  D0-D9 with the O-B1 gate before D7-D9, E7 fixture re-record proposal),
+  with the director's ruling of 2026-10-25 appended. The ruling accepts
+  A5-A9 as proposed, ratifies the additive-only FixtureReplayHarness.swift
+  edit (to be checked by an additions-only git diff at implementation
+  review), approves the device plan and E7 as proposals, and adds one
+  binding condition: the harvest manifest must record the SHA-256 of
+  fixture-solo-loudnorm.caf (hashes of the three Arm-2 fixtures strongly
+  recommended). The plan names the director, not the owner, as
+  adjudicator of the amendments, per D-13.
+- ObservatoryTests/U4a2ChannelBConfig.json: the plan's section 2 draft
+  JSON, copied unchanged. Every value is frozen as the director ruled
+  (A5-A9 ACCEPTED as proposed, 2026-10-25). The SHA-256 condition is a
+  harvest-manifest implementation requirement, not a config field, so it
+  is not in this file. Nothing loads this file yet.
+- PLAN.md: current-state line updated to "U4a-2 in flight".
+
+Not done and not claimed: none of the section 3 files (harvest records,
+the additive harness entry point, Channel B analysis, tests) exist yet.
+No simulator suite was run for this commit. Nothing was built or
+installed on the device. Alignment outcome (O-B1/O-B2/O-B3), coverage
+and fit results are all unknown. Still to do, each gated by the owner:
+implementation and simulator suite (verified by the director against
+the xcresult), then each of D0-D9 approved separately, then the
+exit-protocol commit. Two owner decisions on E7 are still open (whether
+the second voice is a consenting human or on-device TTS, and whether
+E7 rides the D-session or happens separately).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

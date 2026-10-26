@@ -1,0 +1,75 @@
+{
+  "configID": "u4a2.channelB.default",
+  "configVersion": "0.1.0",
+  "specBase": "PROPOSALS/U4a-proposal.md Revision 2, sections 8 and 9 M5 (pre-registered at 5d83779)",
+  "ladder": {
+    "_amendment": "A5",
+    "_reason": "Section 8.5 requires one audible passage but names none. E9 secondary passage: single speaker, full word recovery at every position (20/20/18).",
+    "passageSource": "fixture-solo-loudnorm",
+    "sourceSampleRateHz": 48000,
+    "passageStartFrame": 1824000,
+    "passageEndFrame": 2400000,
+    "leadingSilenceSeconds": [0, 5, 10, 20],
+    "trailingSilenceSeconds": 0,
+    "replicateRungs": [0]
+  },
+  "alignment": {
+    "_amendment": "A6",
+    "_reason": "Section 8.5 predicts a shift of the voiced region but does not define its measurement. B-to-B lag over the full range avoids all three banned sources (word timestamps, callback arrival, A/B-agreement-maximizing offset).",
+    "lagMethod": "normalizedCrossCorrelation",
+    "referenceRung": 0,
+    "primaryFeature": "voicing",
+    "corroboratingFeature": "pitch",
+    "lagSearch": "fullRange",
+    "nonFiniteHandling": "excludeFrameFromCorrelation",
+    "lagToleranceFrames": 1,
+    "durationToleranceFrames": 1,
+    "featureLagDisagreementOutcome": "O-B2",
+    "missingOrFailedRungOutcome": "O-B2",
+    "noAnalyticsOnAnyRungOutcome": "O-B3",
+    "uncertaintyFloor": "oneFrameDuration"
+  },
+  "requestLifecycle": {
+    "_amendment": "A7",
+    "_reason": "Section 8.3's last-final-wins and superseded-final counting require listening past the first final; 55 s chunking matches E3 and production rollover.",
+    "ladderRequestsPerRung": 1,
+    "arm2ChunkSeconds": 55.0,
+    "arm2ChunkBoundary": "contiguousNoOverlap",
+    "postFinalGraceSeconds": 5.0,
+    "timeoutSeconds": { "minimum": 120, "fedPlus": 60 },
+    "requiresOnDeviceRecognition": true,
+    "shouldReportPartialResults": true,
+    "addsPunctuation": true,
+    "audioSession": { "category": "record", "mode": "measurement", "options": ["duckOthers"] },
+    "matchLiveTapFormat": true,
+    "errorPolicy": "catchAndContinueRecordFailed"
+  },
+  "frameMatching": {
+    "_amendment": "A8",
+    "_reason": "Section 8.6 requires fitting only independently aligned voiced frames; the boundary guard removes pairings that alignment uncertainty makes ambiguous.",
+    "mapping": "bFrameCentreToContainingChannelAHopSlot",
+    "channelAHopMs": 10,
+    "requireChannelAState": "voiced",
+    "requireChannelAF0": true,
+    "requireBFinite": true,
+    "boundaryGuard": "max(alignmentUncertaintySeconds, bFrameDuration)"
+  },
+  "fit": {
+    "_amendment": "A9",
+    "_reason": "Section 8.6 names a fit with a held-out split but no model; running all three leave-one-out rotations is a documented superset of fit-on-two-test-on-third.",
+    "model": "OLS: B2 = a + b * ln(F0_A_Hz)",
+    "heldOut": "leaveOneFixtureOut",
+    "rotations": 3,
+    "fixtures": ["fixture-solo", "fixture-multi-a", "fixture-multi-b"],
+    "minimumMatchedFramesPerFixture": 200,
+    "report": ["a", "b", "r2", "residualSD", "spearmanRho", "heldOutRMSE", "heldOutBias", "nFit", "nTest"]
+  },
+  "coverage": {
+    "_note": "Section 8.7 restated as data, not an amendment.",
+    "features": ["pitch", "jitter", "shimmer", "voicing"],
+    "usable": "presentAndFinite",
+    "reportExactZeroFractionSeparately": true,
+    "variants": ["wholeEligibleDomain", "successfullyProcessedFedIntervals"],
+    "zeroDenominator": "nil"
+  }
+}
