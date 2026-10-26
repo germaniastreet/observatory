@@ -1,0 +1,42 @@
+Record the U4a-2 ChatGPT review and the owner's four decisions (D-20, D-21, S1, V1/V2)
+
+Docs-only commit. No code, no fixtures, no production file.
+
+Contents:
+- PROPOSALS/U4a-2-chatgpt-review-brief.md (new): the review brief on the
+  U4a-2 O-B2 finding record (sections 1-5), ChatGPT's full reply (section 6),
+  and the director's processing (section 7). Verdict: accept the finding
+  record with wording refinements; withhold Channel-B production
+  integration; recommend the bounded SpeechAnalyzer spike before U5 sizing.
+  Refinements adopted prospectively (committed history is not edited):
+  "array duration matches reported speechDuration; frame origin unresolved"
+  replaces "speech-anchored"; Arm 2 is "not evaluated because its alignment
+  gate failed", neither zero coverage nor a failed fit; the observed
+  speechStartTimestamp tracking is a measured result while anchoring arrays
+  via it is the unvalidated candidate, gated by a six-part evidence bar;
+  the review's four alternative hypotheses (extraction/association error,
+  fed-PCM verification, speech-time compression or segment selection,
+  request/session state) become mandatory controls for any future Channel-B
+  run; the joint feature collapse on silence-padded rungs is a rejection
+  condition, and no safe leading-silence threshold may be inferred. The
+  director re-verified the rung-0 replicate bit-identity element-by-element
+  (all four arrays, metadata, and callback counts exactly equal).
+- DECISIONS.md: D-20 (owner-approved bounded SpeechAnalyzer fixture spike,
+  scope-ruling change; spike does NOT authorize migration; design bullets
+  binding on the spike proposal) and D-21 (Channel-A validity units adopted
+  and ordered: V1 estimator agreement vs Praat/YIN with Bland-Altman and
+  clustering accounted, first; V2 within-person repeatability/MDC second;
+  alongside the spike, never blocking a transcript-only U5, but required
+  before any "change exceeds measurement error" claim). The out-of-scope
+  line is clarified: migration stays out of scope, the bounded spike is in.
+- PLAN.md: U4a-2 entry updated with the review outcome; queue additions S1
+  (SpeechAnalyzer spike, proposal-first, U5 sizing waits on its result,
+  E7 fixture re-record riding its device session with a consenting-human
+  second voice) and V1/V2; owner decisions recorded as resolved (including
+  deferral of the smallest Channel-B follow-up until S1's result).
+
+Measured/verified: the review's factual challenges were checked against
+artifacts where possible (replicate bit-identity re-verified in full).
+Unverified: none of the review's hypotheses about the content-collapse
+mechanism are tested - they are adopted as controls for future runs, not
+as findings.
