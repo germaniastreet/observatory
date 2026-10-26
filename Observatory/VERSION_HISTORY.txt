@@ -1019,3 +1019,108 @@ flag, because real audio offers no independent floor measurement to check
 it against. Nucleus rates are reference-unscored estimates. Channel B,
 speaker attribution, production integration and all of Stage 2 remain
 untouched.
+
+================================================================================
+U4a-2 -- Acoustic-expression prototype, Channel B (SFVoiceAnalytics), M5
+2026-10-25
+================================================================================
+
+Outcome: M5 reached on device with ladder outcome O-B2 -- alignment NOT
+established. Channel B coverage (B5) and the A6<->B2 pitch fit are
+unavailable(.alignmentUnresolved); only descriptive array statistics
+exist. Arm 2 (D7-D9, coverage on the three fixtures) was NOT run, because
+the pre-registered O-B1 gate was not met (spec section 8.5, plan Flag 1).
+Under section 9 M5 this is a passing outcome. What fails M5 is a coverage
+number without established alignment, and none was produced.
+
+Spec: PROPOSALS/U4a-proposal.md Revision 2, sections 8 and 9 M5, with
+amendments A5-A9 as ruled by the director in PROPOSALS/U4a-2-plan.md.
+Parameters: ObservatoryTests/U4a2ChannelBConfig.json, frozen and
+pre-registered at b7bbd9f and unchanged since.
+
+What was built (test-only, ObservatoryTests/ only, no production-target
+file, no fixture modified):
+- VoiceAnalyticsHarvest.swift: the frozen-config loader and hasher, with
+  every algorithm selector checked against what the code implements, and
+  the numbers-only harvest records (the section 8.2 input mapping,
+  per-callback (index, isFinal) audit, per-final feature arrays, result
+  metadata, a separate deprecated segment-level diagnostic key,
+  chunkOutcome, the superseded-final count). No transcript text or
+  substring is ever read. Unavailable is null, never 0 (D-07).
+- FixtureReplayHarness.swift: one additive entry point,
+  harvestVoiceAnalytics. Every existing line is byte-identical; the
+  director verified the diff contains added lines only.
+- ChannelBAnalysis.swift: pure functions for the A6 ladder classifier,
+  section 8.7 B5 (both variants), A8 frame matching, the A9 fit,
+  descriptive statistics and report assembly.
+- ChannelBAnalysisTests.swift: 12 synthetic-array tests plus the
+  simulator assessment test.
+- AcousticVoiceAnalyticsDeviceTests.swift: device-only harvest tests,
+  compiled out on the simulator.
+
+Simulator suite at implementation (xcresult 2026-10-25 21:43): 98 tests,
+90 passed, 8 failed. All 13 new tests pass; the 8 failures are the
+pre-existing speech-permission replay set, unchanged.
+
+Device ladder (iPhone 16 Pro, iOS 27.0.1 build 24A446). The same 12 s
+passage of fixture-solo-loudnorm (frames 1,824,000..2,400,000) was fed
+after 0/5/10/20 s of leading silence, plus a rung-0 replicate. Every
+request succeeded with one final and no superseded finals. Every harvest
+manifest's frozen-config SHA-256 (42ff3595...) and input-file SHA-256s
+(fixture-solo-loudnorm 6996b887..., plus the three Arm-2 fixtures) were
+verified against this machine's copies. The assessment (xcresult
+Test-Observatory-2026.10.25_22-54-51, report
+u4a2-channelB-report-20261025.json in the device-backups folder)
+returned status=assessed, ladder O-B2 with reasons
+durationDoesNotTrackFedAudio and lagUndefined, and
+arm2=notRunAlignmentGate.
+
+Director findings, recorded verbatim:
+(a) per-frame SFVoiceAnalytics arrays cover only the recognizer's detected
+speech region (speechDuration ≈ 9.63–9.69 s on every rung; arrays 160–162
+frames × 0.06 s), so A6's duration rule fails on every rung and B-to-B lags
+cannot express the inserted silence — the arrays are speech-anchored, not
+feed-anchored;
+(b) result metadata speechStartTimestamp DID track inserted silence almost
+exactly (2.19/7.20/12.24/22.20 s; replicate bit-identical), but it is
+outside A6's frozen pass path — using it would be arguing into O-B1, so it
+is recorded as a future-amendment candidate requiring its own proposal and
+interaction analysis with E8 reset semantics, NOT as a result;
+(c) device-session incidents, honestly: two environmental 'Session
+activation failed' (561017449) attempts on rung 5 before a clean retry, and
+Xcode test-log pruning destroyed the original rung-0/rung-5 xcresults
+before attachment extraction, so rung 0 and rung 5 were re-run with owner
+approval and extracted immediately (re-runs reproduced the originals' frame
+counts exactly: 162/161).
+
+Additional artifact observation (Claude, read from the five harvest JSONs;
+DIRECTOR-VERIFIED 2026-10-25 against the harvest files, numbers exact): on every
+silence-padded rung (5/10/20 s), voicing is a single constant value
+(0.000748) in every frame, jitter and shimmer are exactly 0 in every
+frame, and pitch spans only about -0.11 to +0.14. On rung 0 and its
+replicate, all four features vary (pitch -0.75 to +1.39, voicing 0.011 to
+0.282). Leading silence changed the arrays' content, not only their
+placement. That is why the voicing lag is undefined (zero variance)
+rather than merely off on those rungs. Any future speechStartTimestamp
+amendment would also have to account for it.
+
+Measured: the five ladder harvests on device, each with verified
+frozen-config and frozen-input hashes, and the O-B2 classification
+produced from them by the simulator assessment. Also the synthetic-array
+checks of every classifier, coverage, matching and fit path (simulator).
+
+Integration-tested but not validated: any Channel-B coverage or fit
+claim -- none exists. B5 and the A9 fit were exercised only on synthetic
+arrays, and on real data they are unavailable(.alignmentUnresolved) by
+construction.
+
+Unverified: nothing beyond the artifacts listed above. In particular:
+whether a speechStartTimestamp-anchored alignment would hold up (an
+amendment candidate, not tested); anything about the Arm-2 fixtures (not
+run); and any device, OS or configuration other than the one used. The
+rung-5 session-activation failures and the xcresult pruning in (c) are
+the director's session record, and no artifact of either survives.
+
+Not claimed: no perceptual, emotional or clinical validity; no
+pitch-unit mapping (B2 stays rawUnspecifiedLog); no production
+integration, which remains U4 and is not implied by this outcome.

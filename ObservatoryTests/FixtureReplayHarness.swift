@@ -1260,3 +1260,214 @@ enum FixtureReplayHarness {
         }
     }
 }
+
+// MARK: - U4a-2 Channel B harvest (additive entry point)
+//
+// Added for U4a-2 (PROPOSALS/U4a-2-plan.md §3, Flag 2 — director-ratified as an
+// additions-only edit). Nothing above this line was changed, so E1–E10 stay comparable.
+// It lives in this file only because it must share the `private` feed helpers
+// (`appendAudio`, `appendSilence`, `probeEngine`, `FeedingTaskBox`, `speechAuthorization`).
+
+extension FixtureReplayHarness {
+    /// Harvest-loop bookkeeping shared between the feeding task, the monitor and the
+    /// consumer — all MainActor, so a plain class is enough.
+    @MainActor
+    private final class VoiceAnalyticsHarvestState {
+        var lastFinalAt: Date?
+        var feedItemsCompleted = 0
+        var endAudioCalled = false
+    }
+
+    private enum VoiceAnalyticsEvent: Sendable {
+        case callback(VoiceAnalyticsCallbackSnapshot)
+        case error(domain: String, code: Int)
+        case taskCompleted
+        case graceElapsed
+        case timedOut
+        case feedFailed
+    }
+
+    /// U4a-2 Channel B: runs ONE recognition request over `feedPlan` (an ordered list of
+    /// source-file sample ranges and synthesized silences) and returns the numbers-only
+    /// harvest record. Differs from `runSingleRequest` exactly where §8.3/A7 require:
+    ///
+    /// - It keeps listening past the first final — until the task completes, or
+    ///   `postFinalGraceSeconds` after the most recent final — so superseded finals can be
+    ///   counted and the last one wins.
+    /// - A recognition error (including 1110) does not throw: it is caught and recorded
+    ///   as `chunkOutcome: .failed(domain, code)`; the caller continues (A7 error policy).
+    /// - The §8.2 input mapping is fixed before the request exists.
+    ///
+    /// Request flags, session and submitted format come from the frozen A7 config and
+    /// match this file's existing replay paths. Setup failures (permission, recognizer
+    /// unavailable, unreadable file) still throw: they are not harvests.
+    @MainActor
+    static func harvestVoiceAnalytics(
+        audioURL: URL,
+        feedPlan: [VoiceAnalyticsFeedItem],
+        sourceID: SourceID,
+        requestIndex: Int,
+        lifecycle: U4a2ChannelBConfig.RequestLifecycle
+    ) async throws -> RequestHarvest {
+        let authorization = await speechAuthorization()
+        guard authorization == .authorized else {
+            throw FixtureReplayError.speechPermissionNotGranted
+        }
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+              recognizer.isAvailable else {
+            throw FixtureReplayError.recognizerUnavailable
+        }
+        if lifecycle.requiresOnDeviceRecognition {
+            guard recognizer.supportsOnDeviceRecognition else {
+                throw FixtureReplayError.onDeviceRecognitionUnavailable
+            }
+        }
+
+        let (category, mode, options) = try lifecycle.audioSession.resolved()
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(category, mode: mode, options: options)
+        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+
+        let file = try AVAudioFile(forReading: audioURL)
+        let targetFormat: AVAudioFormat = lifecycle.matchLiveTapFormat
+            ? Self.probeEngine.inputNode.outputFormat(forBus: 0)
+            : file.processingFormat
+
+        let submittedSampleFormat: SampleFormat
+        switch targetFormat.commonFormat {
+        case .pcmFormatFloat32: submittedSampleFormat = .float32
+        case .pcmFormatInt16: submittedSampleFormat = .int16
+        case .pcmFormatInt32: submittedSampleFormat = .int32
+        default: submittedSampleFormat = .other
+        }
+        let mapping = RequestInputMapping.plan(
+            sourceID: sourceID, requestIndex: requestIndex, feedPlan: feedPlan,
+            sourceSampleRateHz: file.processingFormat.sampleRate,
+            submittedSampleRateHz: targetFormat.sampleRate,
+            submittedChannelCount: Int(targetFormat.channelCount),
+            submittedSampleFormat: submittedSampleFormat)
+        let timeoutSeconds = lifecycle.timeout(forFedSeconds: mapping.fedDurationSeconds)
+        let graceSeconds = lifecycle.postFinalGraceSeconds
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = lifecycle.shouldReportPartialResults
+        request.addsPunctuation = lifecycle.addsPunctuation
+        request.requiresOnDeviceRecognition = lifecycle.requiresOnDeviceRecognition
+
+        let state = VoiceAnalyticsHarvestState()
+        let feedingTaskBox = FeedingTaskBox()
+        let (events, continuation) = AsyncStream.makeStream(of: VoiceAnalyticsEvent.self)
+
+        // The handler converts each result to a numbers-only snapshot on the spot; no
+        // transcript text is read and no result object leaves the closure.
+        let recognitionTask = recognizer.recognitionTask(with: request) { result, error in
+            if let result {
+                continuation.yield(.callback(VoiceAnalyticsCapture.snapshot(result)))
+            }
+            if let error {
+                let ns = error as NSError
+                continuation.yield(.error(domain: ns.domain, code: ns.code))
+            }
+        }
+
+        // Task completion, post-final grace and the overall timeout, polled. Completion is
+        // re-posted through the recognizer's own queue so any handler call already queued
+        // there (e.g. a last final) is delivered before the completion event.
+        let monitor = Task { @MainActor in
+            let started = Date()
+            var completionPosted = false
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                if !completionPosted, recognitionTask.state == .completed {
+                    completionPosted = true
+                    recognizer.queue.addOperation { continuation.yield(.taskCompleted) }
+                }
+                if let last = state.lastFinalAt, Date().timeIntervalSince(last) >= graceSeconds {
+                    continuation.yield(.graceElapsed)
+                }
+                if Date().timeIntervalSince(started) >= timeoutSeconds {
+                    continuation.yield(.timedOut)
+                }
+            }
+        }
+
+        let feedingTask = Task { @MainActor in
+            do {
+                for item in feedPlan {
+                    switch item {
+                    case .source(let range):
+                        try await appendAudio(from: file, range: range, to: request, targetFormat: targetFormat)
+                    case .silence(let seconds):
+                        try await appendSilence(duration: seconds, to: request, targetFormat: targetFormat)
+                    }
+                    state.feedItemsCompleted += 1
+                }
+                request.endAudio()
+                state.endAudioCalled = true
+            } catch is CancellationError {
+                // Listening already stopped; nothing more to feed.
+            } catch {
+                request.endAudio()
+                state.endAudioCalled = true
+                continuation.yield(.feedFailed)
+            }
+        }
+        feedingTaskBox.set(feedingTask)
+
+        var callbacks: [CallbackAuditEntry] = []
+        var finals: [FinalResultRecord] = []
+        var segmentDiagnostics: [SegmentLevelDiagnostic] = []
+        var outcome: ChunkOutcome = .succeeded
+        var listeningEnd: ListeningEnd = .taskCompleted
+
+        listening: for await event in events {
+            switch event {
+            case .callback(let snapshot):
+                let index = callbacks.count
+                callbacks.append(CallbackAuditEntry(callbackIndex: index, isFinal: snapshot.isFinal))
+                guard snapshot.isFinal else { continue }
+                let ordinal = finals.count
+                finals.append(FinalResultRecord(finalOrdinal: ordinal, callbackIndex: index,
+                                                metadata: snapshot.metadata,
+                                                voiceAnalytics: snapshot.voiceAnalytics))
+                for (segmentIndex, segment) in snapshot.segments.enumerated() {
+                    segmentDiagnostics.append(SegmentLevelDiagnostic(
+                        finalOrdinal: ordinal, segmentIndex: segmentIndex,
+                        segmentTimestamp: segment.timestamp, segmentDuration: segment.duration,
+                        voiceAnalytics: segment.analytics))
+                }
+                state.lastFinalAt = Date()
+            case .error(let domain, let code):
+                outcome = .failed(domain: .trusted(domain), code: code)
+                listeningEnd = .errorReceived
+                break listening
+            case .taskCompleted:
+                listeningEnd = .taskCompleted
+                break listening
+            case .graceElapsed:
+                listeningEnd = .postFinalGraceElapsed
+                break listening
+            case .timedOut:
+                outcome = .failed(domain: .trusted("u4a2.harness.timeout"), code: 0)
+                listeningEnd = .timedOut
+                break listening
+            case .feedFailed:
+                outcome = .failed(domain: .trusted("u4a2.harness.feedFailed"), code: 0)
+                listeningEnd = .feedFailed
+                break listening
+            }
+        }
+
+        monitor.cancel()
+        feedingTaskBox.cancel()
+        continuation.finish()
+        recognitionTask.cancel()
+
+        let harvest = RequestHarvest.assemble(
+            mapping: mapping, callbacks: callbacks, finals: finals,
+            segmentDiagnostics: segmentDiagnostics, outcome: outcome, listeningEnd: listeningEnd,
+            feedItemsCompleted: state.feedItemsCompleted, feedItemCount: feedPlan.count,
+            endAudioCalled: state.endAudioCalled)
+        return harvest
+    }
+}

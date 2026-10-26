@@ -1,0 +1,88 @@
+Add the Channel B (SFVoiceAnalytics) alignment ladder; M5 outcome O-B2, alignment not established (U4a-2)
+
+U4a-2 implements milestone M5 of PROPOSALS/U4a-proposal.md Revision 2
+(sections 8 and 9 M5), with amendments A5-A9 as ruled by the director in
+PROPOSALS/U4a-2-plan.md. Every parameter comes from
+ObservatoryTests/U4a2ChannelBConfig.json, frozen and pre-registered at
+b7bbd9f and unchanged by this commit.
+
+Outcome: the device ladder classified O-B2. Alignment of the
+SFVoiceAnalytics frame arrays to the fed audio was NOT established.
+Channel B coverage (B5) and the A6<->B2 pitch fit are therefore
+unavailable(.alignmentUnresolved); the report carries descriptive array
+statistics only. Arm 2 (D7-D9, coverage on the three fixtures) was not
+run, because the pre-registered O-B1 gate was not met. Under section 9 M5
+O-B2 is a passing outcome. What fails M5 is a coverage number without
+established alignment, and none was produced.
+
+Files (test-only, ObservatoryTests/; no production-target file and no
+fixture touched):
+- VoiceAnalyticsHarvest.swift (new): frozen-config loader and SHA-256
+  hasher, with every algorithm selector checked against what the code
+  implements. Also the numbers-only harvest records: section 8.2 input
+  mapping, (callbackIndex, isFinal) audit, per-final feature arrays,
+  result metadata, a separate deprecated segment-level diagnostic key,
+  chunkOutcome and superseded-final count. No transcript text or
+  substring is read; unavailable is null, never 0 (D-07). Harvest
+  manifests record the SHA-256 of fixture-solo-loudnorm.caf (the
+  director's binding condition) and of the three Arm-2 fixtures.
+- FixtureReplayHarness.swift: one additive entry point,
+  harvestVoiceAnalytics, appended as a same-file extension so it can
+  share the private feed helpers. Every existing line is byte-identical;
+  the director verified that the diff contains added lines only, as the
+  ratification of Flag 2 required.
+- ChannelBAnalysis.swift (new): pure functions for the A6 ladder
+  classifier, section 8.7 B5 (both variants), A8 frame matching, the A9
+  fit, descriptive statistics and report assembly. Every number goes
+  through a value type that enforces value != nil <=> .valid.
+- ChannelBAnalysisTests.swift (new): 12 synthetic-array tests (O-B1,
+  three O-B2 cases, O-B3, B5 nil/0.0, B5 refused without O-B1, overlap
+  counted once, a failed chunk in both variants, superseded finals, the
+  fit recovering a known log relation with its held-out step, the
+  under-200 path, the schema/privacy scan) plus the simulator assessment
+  test.
+- AcousticVoiceAnalyticsDeviceTests.swift (new): device-only tests that
+  only harvest, compiled out on the simulator.
+
+Also updated: the Status section of
+Observatory/STABILIZATION_AND_EXPRESSION_PLAN.md and
+Observatory/VERSION_HISTORY.txt.
+
+Simulator suite at implementation: 98 tests, 90 passed, 8 failed. All
+13 new tests pass; the 8 failures are the pre-existing speech-permission
+replay set, unchanged.
+
+Device ladder (iPhone 16 Pro, iOS 27.0.1): one 12 s fixture-solo-loudnorm
+passage after 0/5/10/20 s of leading silence, plus a rung-0 replicate.
+Every harvest's frozen-config and input-file hashes were verified. The
+simulator assessment (xcresult Test-Observatory-2026.10.25_22-54-51)
+returned ladder O-B2 (durationDoesNotTrackFedAudio, lagUndefined) and
+arm2=notRunAlignmentGate. Director findings:
+(a) the arrays cover only the recognizer's detected speech region
+(speechDuration 9.63-9.69 s on every rung; 160-162 frames x 0.06 s). They
+are speech-anchored, not feed-anchored, so A6's duration rule fails on
+every rung and B-to-B lags cannot express the inserted silence.
+(b) result-metadata speechStartTimestamp did track the inserted silence
+almost exactly (2.19/7.20/12.24/22.20 s; replicate bit-identical). It is
+outside A6's frozen pass path, so it is recorded as a future-amendment
+candidate needing its own proposal and E8 interaction analysis, not as a
+result.
+(c) session incidents: two environmental 'Session activation failed'
+(561017449) attempts on rung 5 before a clean retry; Xcode test-log
+pruning destroyed the original rung-0/rung-5 xcresults before
+extraction, so both were re-run with owner approval and extracted
+immediately (frame counts reproduced exactly: 162/161).
+
+An additional observation from the harvest JSONs, director-verified against
+the five harvest files (numbers exact): on the silence-padded rungs (5/10/20 s), voicing is
+constant, jitter and shimmer are exactly 0, and pitch is compressed to
+about +/-0.13. Rung 0 and its replicate vary normally. Leading silence
+changed the arrays' content, not just their placement.
+
+Not claimed: no Channel-B coverage, no pitch-unit mapping (B2 stays
+rawUnspecifiedLog), nothing about the Arm-2 fixtures, nothing beyond
+this one passage, device, OS and configuration. No perceptual, emotional
+or clinical validity. No production integration, which remains U4 and is
+not implied by this outcome.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
