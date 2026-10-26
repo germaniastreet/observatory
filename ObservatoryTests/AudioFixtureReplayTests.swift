@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Speech
 import Testing
 @testable import Observatory
 
@@ -7,6 +8,26 @@ import Testing
 /// structs aren't `NSObject`s, so this empty class exists purely to give
 /// `Bundle(for:)` something defined inside this target to key off of.
 private final class BundleLocator {}
+
+/// Resumes the recognizer probe's continuation exactly once -- the recognition
+/// callback (arbitrary queue) and the probe's timeout race to finish it.
+private final class RecognizerProbeResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<NSError?, Never>?
+
+    func set(_ continuation: CheckedContinuation<NSError?, Never>) {
+        lock.lock(); defer { lock.unlock() }
+        self.continuation = continuation
+    }
+
+    func resume(_ error: NSError?) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: error)
+    }
+}
 
 private struct FixtureCase {
     let name: String
@@ -58,9 +79,93 @@ struct AudioFixtureReplayTests {
     /// `wordCount > 0` floor isn't enough.
     private static let minimumWordFidelity = 0.7
 
+    /// C1 test hygiene: on the iOS Simulator the on-device recognizer is
+    /// intermittently unusable (observed: `kLSRErrorDomain` Code=300 "Failed
+    /// to initialize recognizer", a missing Siri Understanding asset in the
+    /// simulator's MobileAsset store), so the replay diagnostics below failed
+    /// as a flaky set of 3-8 tests that pass on device. Called as the first
+    /// line of each affected test, this probes the environment once and
+    /// cancels (Swift Testing's skip-after-start) with the exact error when
+    /// -- and only when -- the simulator genuinely can't run the test.
+    ///
+    /// Guarantees:
+    /// - Device: compiled to a no-op (`targetEnvironment(simulator)` gate),
+    ///   so device runs issue no extra recognition request and behave
+    ///   exactly as before.
+    /// - Only the *start-of-test* probe can skip. Anything the test itself
+    ///   later throws or records -- including a kLSR 300 that appears
+    ///   mid-test after a successful probe -- still fails the test.
+    /// - Skips only for: speech authorization denied/restricted, no en-US
+    ///   recognizer / recognizer unavailable / on-device recognition
+    ///   unsupported (the harness's own pre-flight guards), or kLSR 300 from
+    ///   a 1 s probe request. Every other probe outcome -- including
+    ///   `kAFAssistantErrorDomain` 1110 "No speech detected", a timeout, or
+    ///   any other error -- lets the test run normally.
+    @MainActor
+    private static func cancelIfSimulatorRecognizerUnavailable() async throws {
+        #if targetEnvironment(simulator)
+        var authorization = SFSpeechRecognizer.authorizationStatus()
+        if authorization == .notDetermined {
+            // The harness would request authorization at this point anyway.
+            authorization = await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+            }
+        }
+        guard authorization == .authorized else {
+            try Test.cancel("Simulator environment cannot run speech replay: SFSpeechRecognizer authorization status is \(authorization.rawValue) (not .authorized).")
+        }
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), recognizer.isAvailable else {
+            try Test.cancel("Simulator environment cannot run speech replay: \(FixtureReplayError.recognizerUnavailable.description)")
+        }
+        guard recognizer.supportsOnDeviceRecognition else {
+            try Test.cancel("Simulator environment cannot run speech replay: \(FixtureReplayError.onDeviceRecognitionUnavailable.description)")
+        }
+
+        // A missing probe fixture isn't environmental -- let the test's own
+        // `#require` report it.
+        guard let probeURL = fixtureURL(named: "fixture-solo"),
+              let file = try? AVAudioFile(forReading: probeURL),
+              let buffer = AVAudioPCMBuffer(
+                  pcmFormat: file.processingFormat,
+                  frameCapacity: AVAudioFrameCount(min(file.length, AVAudioFramePosition(file.processingFormat.sampleRate)))
+              ),
+              (try? file.read(into: buffer)) != nil
+        else { return }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = false
+        request.requiresOnDeviceRecognition = true
+
+        let once = RecognizerProbeResumeOnce()
+        var recognitionTask: SFSpeechRecognitionTask?
+        let probeError: NSError? = await withCheckedContinuation { continuation in
+            once.set(continuation)
+            recognitionTask = recognizer.recognitionTask(with: request) { result, error in
+                if let error {
+                    once.resume(error as NSError)
+                } else if result?.isFinal == true {
+                    once.resume(nil)
+                }
+            }
+            request.append(buffer)
+            request.endAudio()
+            Task {
+                try? await Task.sleep(for: .seconds(30))
+                once.resume(nil)   // timeout: not proof of an environment failure
+            }
+        }
+        recognitionTask?.cancel()
+
+        if let probeError, probeError.domain == "kLSRErrorDomain", probeError.code == 300 {
+            try Test.cancel("Simulator recognizer unavailable (probe request failed before the test started): \(probeError)")
+        }
+        #endif
+    }
+
     @MainActor
     @Test("Selected recordings preserve word timing and expected speaker separation")
     func replaySelectedRecordings() async throws {
+        try await Self.cancelIfSimulatorRecognizerUnavailable()
         for fixture in Self.cases {
             let audioURL = try #require(
                 Self.fixtureURL(named: fixture.name),
@@ -108,6 +213,7 @@ struct AudioFixtureReplayTests {
     @MainActor
     @Test("Diagnostic: duration-slice test for fixture-solo (E1)")
     func diagnosticDurationSlice() async throws {
+        try await Self.cancelIfSimulatorRecognizerUnavailable()
         let audioURL = try #require(Self.fixtureURL(named: "fixture-solo"))
         let file = try AVAudioFile(forReading: audioURL)
         let sampleRate = file.processingFormat.sampleRate
@@ -137,6 +243,7 @@ struct AudioFixtureReplayTests {
     @MainActor
     @Test("Diagnostic: production-matching chunked replay (E3)")
     func diagnosticChunkedReplay() async throws {
+        try await Self.cancelIfSimulatorRecognizerUnavailable()
         for fixture in Self.cases {
             let audioURL = try #require(
                 Self.fixtureURL(named: fixture.name),
@@ -167,6 +274,7 @@ struct AudioFixtureReplayTests {
     @MainActor
     @Test("Diagnostic: gain-normalization A/B (E5)")
     func diagnosticGainNormalization() async throws {
+        try await Self.cancelIfSimulatorRecognizerUnavailable()
         for fixture in Self.cases {
             let audioURL = try #require(
                 Self.fixtureURL(named: "\(fixture.name)-loudnorm"),
@@ -193,6 +301,7 @@ struct AudioFixtureReplayTests {
     @MainActor
     @Test("Diagnostic: live-tap feed (E6)")
     func diagnosticLiveTapFeed() async throws {
+        try await Self.cancelIfSimulatorRecognizerUnavailable()
         for fixture in Self.cases {
             let audioURL = try #require(
                 Self.fixtureURL(named: fixture.name),
@@ -339,6 +448,7 @@ struct AudioFixtureReplayTests {
     @MainActor
     @Test("Diagnostic: identity re-encode control (E10a)")
     func diagnosticIdentityControl() async throws {
+        try await Self.cancelIfSimulatorRecognizerUnavailable()
         for fixture in Self.cases {
             let audioURL = try #require(
                 Self.fixtureURL(named: "\(fixture.name)-identity"),
@@ -365,6 +475,7 @@ struct AudioFixtureReplayTests {
     @MainActor
     @Test("Diagnostic: fixed per-fixture gain control (E10b)")
     func diagnosticFixedGainControl() async throws {
+        try await Self.cancelIfSimulatorRecognizerUnavailable()
         for fixture in Self.cases {
             let audioURL = try #require(
                 Self.fixtureURL(named: "\(fixture.name)-gain"),
@@ -389,6 +500,7 @@ struct AudioFixtureReplayTests {
     @MainActor
     @Test("Diagnostic: E6 session-category control (E10c)")
     func diagnosticSessionCategoryControl() async throws {
+        try await Self.cancelIfSimulatorRecognizerUnavailable()
         for fixture in Self.cases {
             let audioURL = try #require(
                 Self.fixtureURL(named: fixture.name),

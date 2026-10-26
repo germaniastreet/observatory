@@ -419,7 +419,7 @@ struct ChannelBAnalysisTests {
         let inputs = Self.syntheticInputs(c)
         let channelAManifest = try U4aHarness.report([]).manifest
         func assemble(_ files: [U4a2HarvestFile]) throws -> U4a2ChannelBReport {
-            try ChannelBAnalysis.assemble(
+            ChannelBAnalysis.assemble(
                 harvests: try files.map { ($0, U4aHash.hex(try U4aMeasurementReport.encoder(pretty: false).encode($0))) },
                 undecodableFileCount: 0, loaded: loaded, channelAManifest: channelAManifest, inputFiles: inputs,
                 channelA: { _ in ChannelBSynth.track(slots: 600, voiced: { $0 % 50 >= 3 }) })

@@ -416,7 +416,6 @@ enum AcousticAnalyzer {
         }
         let decRate = sampleRate / Double(factor)
         let decimated = decimate(spanSamples, factor: factor, sampleRate: sampleRate, cutoff: decRate * 0.4)
-        let decHop = hop / factor
         let pitchFrame = Int((decRate * cfg.frameGeometry.pitchFrameMs / 1000).rounded())
         let minLag = max(2, Int((decRate / cfg.periodicity.searchMaxHz).rounded()))
         let maxLag = Int((decRate / cfg.periodicity.searchMinHz).rounded())

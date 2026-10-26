@@ -1,0 +1,57 @@
+Test hygiene: skip environmental replay tests honestly; clear two warnings (C1)
+
+Test-only cleanup unit (C1), owner-approved. ObservatoryTests/ only; no
+production-target file, no fixture, no frozen config touched.
+
+Before: the simulator suite carried a flaky set of 3-8 failures in the
+Stage-0 replay diagnostics (E1/E3/E5/E6/E10a-c and the word-timing test),
+caused by the simulator's on-device recognizer being intermittently
+unusable (kLSRErrorDomain Code=300 "Failed to initialize recognizer");
+the same tests pass on device. Every unit's verification had to explain
+the known-failure set, which could mask a real regression.
+
+Changes:
+- AudioFixtureReplayTests.swift: a start-of-test environment probe,
+  compiled only for the simulator (#if targetEnvironment(simulator) —
+  a no-op on device, so device behavior is unchanged). It cancels
+  (Swift Testing skip, with the exact error recorded) only when the
+  environment genuinely cannot run speech replay: authorization
+  denied/restricted, no/unavailable en-US recognizer, on-device
+  recognition unsupported, or kLSR 300 from a 1 s probe request. Every
+  other outcome — including 1110 "No speech detected", timeouts, and
+  any mid-test error — runs/fails the test normally. No test deleted,
+  no assertion weakened; the existing catch-and-continue handling is
+  untouched.
+- AcousticMeasurementPrototype.swift: removed unused decHop (warning).
+  U4a-1 canonical-payload byte-identity re-verified: the M3 determinism
+  test passes on this commit's build.
+- ChannelBAnalysisTests.swift: removed a redundant try (warning).
+- VoiceAnalyticsHarvest.swift: comment only — documents the single
+  remaining deprecation warning (segment-level voiceAnalytics, iOS
+  14.5) as intentional per the U4a-2 plan's pre-registered
+  deprecatedSegmentLevelDiagnostic key. Marking the helper deprecated
+  would only move the warning to its caller, so it stays as the one
+  documented marker.
+
+Verification (director, from xcresult artifacts): two consecutive green
+runs on the same build — 98 total / 90 passed / 0 failed / 8 skipped,
+the skips being exactly the environmental set with kLSR-300 reasons
+recorded (runs 2026-10-26 00-04-10 and solo 00-31-58, 656 s). Full
+rebuild shows only the documented deprecation warning.
+
+Incident, honestly recorded: the director's first verification run
+(00-09-23) crash-cascaded 71 tests. Root cause: a concurrent second
+test session on the same simulator (incidental Xcode keystrokes); the
+crash stack shows an uncaught NSException from installTapOnBus inside
+production beginListeningSegment() under audio-session contention
+(SIGABRT). Not caused by this change (no production file touched; the
+crashing test passes in both solo runs). It exposed a pre-existing
+production fragility, recorded as PLAN.md open issue 7 for a future
+hardening unit. Also noted: Xcode's Issue navigator shows runtime
+"AVAudioSession Hang Risk" entries from test runs — log residue of the
+sync-session API usage that DECISIONS.md lists as out of scope (full
+async AVAudioSession migration), not compiler warnings.
+
+Known limits: skips are simulator-only; the environmental condition is
+detected per test start, so a recognizer that dies mid-suite still fails
+(never silently skips) the remaining tests.

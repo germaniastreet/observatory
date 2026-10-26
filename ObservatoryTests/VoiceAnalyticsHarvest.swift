@@ -564,6 +564,13 @@ enum VoiceAnalyticsCapture {
 
     /// The deprecated path, isolated to this one call site (§8.1 compatibility
     /// diagnostic) — its single deprecation warning is expected.
+    ///
+    /// INTENTIONAL DEPRECATION WARNING — do not "fix". The U4a-2 plan (§8.1 and
+    /// the `VoiceAnalyticsHarvest.swift` row of its file table) pre-registers a
+    /// separate `deprecatedSegmentLevelDiagnostic` key that reads exactly this
+    /// iOS 14.5-deprecated property. Marking this helper `@available(deprecated:)`
+    /// would only move the warning to the caller in `snapshot(_:)`, so the
+    /// warning is left visible here as the single, documented marker.
     private static func deprecatedSegmentAnalytics(_ s: SFTranscriptionSegment) -> SFVoiceAnalytics? {
         s.voiceAnalytics
     }
